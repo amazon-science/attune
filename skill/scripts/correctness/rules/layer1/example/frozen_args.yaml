@@ -1,0 +1,20 @@
+{
+ "_comment": "Example frozen-arguments file (format only; JSON syntax, which YAML also reads). Point AUTOTUNE_FROZEN_ARGS at a file like this one: make_run_yaml.py refuses a run that sets these arguments otherwise, and layer 1 fails a candidate whose resolved arguments violate them. Its directory is the setup's layer-1 directory, where layer 1 reads allowlist.yaml and ct_status.yaml.",
+ "args": {
+  "global_batch_size": {"eq": 128},
+  "seq_length": {"eq": 8192},
+  "seed": {"eq": 1234},
+  "lr": {"unchanged": true},
+  "moe_token_dispatcher_type": {"in": ["alltoall"], "default": "allgather"}
+ },
+ "products": [
+  {"args": ["max_tokens_per_gpu", "context_parallel_size"], "defaults": {"context_parallel_size": 1}, "eq": 8192}
+ ],
+ "env": {
+  "NVIDIA_TF32_OVERRIDE": {"absent": true}
+ },
+ "couplings": [
+  {"id": "uneven_pp_vpp", "kind": "vpp_middle_stages", "when": "always",
+   "why": "virtual stages need a middle pipeline stage when both uneven end stages are set"}
+ ]
+}

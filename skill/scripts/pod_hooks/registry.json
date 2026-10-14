@@ -1,0 +1,22 @@
+{
+  "_comment": "Hook chain registry (hook_chain.py). Hooks load in this order: miles compatibility (slime's profiler switches and log-timestamp format in miles processes; inert without miles), profiler rank selection, then the parity probe (per-step row, token and loss-mask token counts). src is relative to skill/scripts. default=true hooks load in every run; the others load when named in ATTUNE_HOOKS.",
+  "mount_dir": "/opt/attune_hooks",
+  "volume": "attune-hooks",
+  "hooks": [
+    {
+      "name": "miles_compat",
+      "src": "miles_compat_hook/sitecustomize.py",
+      "default": true
+    },
+    {
+      "name": "profile_rank",
+      "src": "profile_rank_hook/sitecustomize.py",
+      "default": false
+    },
+    {
+      "name": "parity_probe",
+      "src": "correctness/parity_probe/sitecustomize.py",
+      "default": false
+    }
+  ]
+}

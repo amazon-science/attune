@@ -1,0 +1,5 @@
+# Example per-setup component-test results (format only): {tests: {<test>: pass | fail}}. A missing test is not passed.
+version: 1
+tests:
+  CT-grouped-gemm: pass
+  CT-ce-fusion: fail

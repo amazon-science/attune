@@ -1,0 +1,37 @@
+Third-party notices
+
+This repository contains a small amount of code vendored from, or adapted from, the projects below. Each such file
+keeps its upstream notice and says what it took and what it changed. None of the projects' source trees are
+included. The training stack (Megatron-LM, slime, PyTorch, Transformer Engine) and the Python packages the scripts
+import (numpy, PyYAML, pytest, pyarrow, transformers) are runtime dependencies installed
+separately; they are not distributed here.
+
+------------------------------------------------------------------------------------------------------------------------
+NVIDIA Megatron-Bridge
+  Source:  https://github.com/NVIDIA-NeMo/Megatron-Bridge, commit c3c974d4f2e315db8db01945acab6555049c40d7
+  License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+  Used in: skill/scripts/correctness/mbridge_convergence.py
+  What:    validate_convergence() and its numpy import, vendored verbatim from scripts/performance/utils/evaluate.py,
+           with NVIDIA's Apache-2.0 header (lines 1-13 of the file). Layer 2 of the correctness check calls it
+           unmodified. Lines 15-19 are a provenance note added here.
+
+------------------------------------------------------------------------------------------------------------------------
+slime
+  Source:  https://github.com/THUDM/slime
+  License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+  Used in: skill/scripts/profile_analyzer/taxonomy.py
+  What:    The kernel-name classification rules in v1_category() are adapted from slime's tools/analyze_profile.py.
+           The rest of the profile analyzer is original.
+  Changes: Rules moved into a taxonomy module alongside new training-specific classifications (compute classes,
+           parallelism-aware communication, host-side calls).
+  Used in: skill/scripts/data/patch_glm5_mask.py
+  What:    gen_multi_turn_loss_mask_glm5() is adapted from gen_multi_turn_loss_mask_qwen3_5() in slime's
+           slime/utils/mask_utils.py (the rendered-text, offset-mapping and character-mask approach).
+  Changes: GLM-5 chat-template markers (<|assistant|>, <|user|>, <|observation|>, <|endoftext|>), think-prefix
+           handling, and an in-place installer that adds the method and its get_loss_mask() branch.
+  Used in: skill/scripts/data/patch_gptoss_mask.py
+  What:    gen_multi_turn_loss_mask_gpt_oss() is adapted from gen_multi_turn_loss_mask_qwen3_5() in slime's
+           slime/utils/mask_utils.py (the rendered-text, offset-mapping and character-mask approach).
+  Changes: harmony chat-template markers (<|start|>assistant, <|end|>, <|return|>, <|call|>), a frozen template date,
+           checks that refuse conversations the template would not render faithfully, and an in-place installer that
+           adds the method and its get_loss_mask() branch.

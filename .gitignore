@@ -1,0 +1,24 @@
+# Python bytecode and caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Profile analyzer caches (written next to the traces)
+*.pa2*.npz
+*.pa2*.analysis.json
+
+# Local configuration (copy from config.example.env)
+config.env
+
+# Run state produced by the skill and the harness
+attune-projects/
+AUTOTUNE_LEDGER.jsonl
+.stop_gate_state.json
+tracked_jobs.jsonl
+gpuh.jsonl*
+run.out*
+*.log
+*.pt.trace.json.gz
+
+# Campaign summaries are operator-local (skill/past_tuning_projects/README.md)
+skill/past_tuning_projects/*_summary.md

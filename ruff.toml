@@ -1,0 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[lint.per-file-ignores]
+# vendored verbatim from NVIDIA Megatron-Bridge and pinned by MB_SHA256 in parity_verdict.py
+"skill/scripts/correctness/mbridge_convergence.py" = ["F821"]
