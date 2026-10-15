@@ -5,9 +5,9 @@
 
     parity_verdict.py <pair_dir | root_of_pair_dirs> [--json out.json]
 
-A pair directory holds base.log and win.log (train.log of the 20-step baseline and candidate arms made by
-make_parity_arm.py, both with the parity probe loaded) and optionally gpus.json {"base": N, "win": M} and images.json
-{"base": ref, "win": ref}, the image each arm ran.
+A pair directory holds base.log and win.log, the train.log of the baseline's and the candidate's unprofiled runs (their
+own benchmark runs, paired by pair_from_runs.py; or 20-step arms made by make_parity_arm.py, which load the parity
+probe), and optionally gpus.json {"base": N, "win": M} and images.json {"base": ref, "win": ref}, the image each ran.
   L1 layer1.py on the two resolved-argument dumps, with the frozen-arguments file of $AUTOTUNE_FROZEN_ARGS (its
      directory is the setup's layer-1 directory) and, when images.json names one image pinned by digest for both
      arms, that image's rules. An unreadable frozen-arguments file fails L1.
@@ -18,9 +18,10 @@ make_parity_arm.py, both with the parity probe loaded) and optionally gpus.json 
      tolerance 10% / 5% / 2% for loss > 2.0 / 0.5-2.0 / < 0.5 with at most 10% of points outside, final-loss
      tolerance 5%, correlation >= 0.95 and a 3-sigma outlier check. The check is tuned to avoid false rejects: it
      catches gross breakage and can miss subtle faults.
-  Reported, not gating: whether the probe's per-step rows, tokens and loss-mask tokens are identical, the step-0 loss
-     and grad-norm relative differences, the 20-step mean loss gap, and probe tokens / logged step time per GPU
-     (steps 3-19, with gpus.json) for orientation.
+  Reported, not gating: whether the probe's per-step rows, tokens and loss-mask tokens are identical (when the probe
+     ran), the step-0 loss and grad-norm relative differences, the 20-step mean loss gap, and tokens / logged step
+     time per GPU over steps 5-19 (probe tokens when the probe ran, else the logged tokens; with gpus.json) for
+     orientation.
 PASS = L1 and L2. Exit 0 when every pair passes, 1 when any pair fails or cannot be scored, 2 when no pair is found.
 """
 import argparse
@@ -40,12 +41,14 @@ MB_PATH = os.path.join(HERE, "mbridge_convergence.py")
 MB_SHA256 = "0897172c6a3d8654177d080e725209baa45bbc5239538e484269057b99e0d018"  # layer 2: the vendored file
 MB_CONFIG = {"skip_first_percent_loss": 0.20, "final_loss_tolerance": 0.05}  # the pipeline values that differ from the function's
 STEPS = 20
+WINDOW_START = 5   # orientation throughput only: the default measured window 5-19
 COUNT_KEYS = ("rows", "tokens", "loss_tokens")  # the microbatch count is placement, not compared
 _NUM = r"([0-9.eE+-]+)"
 
 
 def read_steps(log):
-    """(loss, counts, perf) per step: {step: (loss, grad_norm)}, {rollout: probe counts}, {step: (tok/s, step_time)}."""
+    """(loss, counts, perf) per step: {step: (loss, grad_norm)}, {rollout: probe counts}, {step: (tokens, step_time)}
+    with the logged tokens = actor_train_tok_per_s x actor_train_time (None without actor_train_time)."""
     loss, counts, perf = {}, {}, {}
     with open(log, errors="ignore") as f:
         for line in f:
@@ -60,9 +63,11 @@ def read_steps(log):
             m = re.search(r"perf (\d+): \{(.*)", line)
             if m:
                 tk = re.search(r"perf/actor_train_tok_per_s.: " + _NUM, m.group(2))
+                tt = re.search(r"perf/actor_train_time.: " + _NUM, m.group(2))
                 stt = re.search(r"perf/step_time.: " + _NUM, m.group(2))
                 if tk and stt:
-                    perf[int(m.group(1))] = (float(tk.group(1)), float(stt.group(1)))
+                    tokens = float(tk.group(1)) * float(tt.group(1)) if tt else None
+                    perf[int(m.group(1))] = (tokens, float(stt.group(1)))
     return loss, counts, perf
 
 
@@ -91,11 +96,18 @@ def _rel(a, b):
 
 
 def _tput(perf, counts, gpus):
-    """Probe tokens / logged step time per GPU over steps 3-19."""
-    ts = [t for t in perf if 3 <= t < STEPS and t in counts]
-    if not ts or not gpus:
+    """Tokens / logged step time per GPU over the default measured window, steps 5-19: probe tokens when every
+    window step has probe counts, else the logged tokens."""
+    ts = [t for t in range(WINDOW_START, STEPS) if t in perf]
+    if len(ts) < STEPS - WINDOW_START or not gpus:
         return None
-    return sum(counts[t]["tokens"] for t in ts) / sum(perf[t][1] for t in ts) / gpus
+    if all(t in counts for t in ts):
+        tokens = [counts[t]["tokens"] for t in ts]
+    elif all(perf[t][0] is not None for t in ts):
+        tokens = [perf[t][0] for t in ts]
+    else:
+        return None
+    return sum(tokens) / sum(perf[t][1] for t in ts) / gpus
 
 
 def pair_image(pair_dir):
@@ -182,11 +194,12 @@ def report(r):
         out.append("  L2 not scored: %s" % r["L2_error"])
     elif not r["L2"]:
         out.append("  L2 failed metrics: %s" % ", ".join(r["convergence"]["failed_metrics"]))
+    probe = "off" if not r["count_steps"] else "identical" if r["counts_identical"] else "DIFFER or missing"
     out.append("  probe counts %s; step-0 loss %s, grad norm %s; 20-step loss gap %s" % (
-        "identical" if r["counts_identical"] else "DIFFER or missing", _pct(r["step0_loss_rel"]),
+        probe, _pct(r["step0_loss_rel"]),
         _pct(r["step0_gradnorm_rel"]), _pct(r["gap20_rel"])))
     if r["base_tok_s_gpu"] and r["win_tok_s_gpu"]:
-        out.append("  tok/s/GPU (probe tokens / step time, orientation only): base %.1f, candidate %.1f"
+        out.append("  tok/s/GPU (steps 5-19, orientation only): base %.1f, candidate %.1f"
                    % (r["base_tok_s_gpu"], r["win_tok_s_gpu"]))
     return "\n".join(out)
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """teardown_run.sh, poll_run.sh and read_metrics.sh against a fake kubectl on PATH (no cluster).
 
-The fake records every call and answers from a JSON state file: `objects` ("kind/name" -> labels and status) for
+The fake records every call and answers from a JSON state file: `objects` ("kind/name" -> labels, spec and status) for
 `get <kind> <name> -o json`, `pods` (label selector -> pods) for `get pods -l`, and `fail` (substring of the call ->
 error) for injected failures. `exec <pod> -- <cmd>` runs <cmd> locally, so the test's files play the pod's volume.
 Run: python3 -m pytest skill/scripts/tests"""
@@ -44,7 +44,7 @@ if rest[:1] == ["get"]:
     if obj is None:
         sys.exit(print('Error from server (NotFound): %s "%s" not found' % (rest[1], rest[2]), file=sys.stderr) or 1)
     sys.exit(print(json.dumps({"metadata": {"name": rest[2], "labels": obj.get("labels", {})},
-                               "status": obj.get("status", {})})) or 0)
+                               "spec": obj.get("spec", {}), "status": obj.get("status", {})})) or 0)
 sys.exit(print("fake kubectl: unexpected call " + call, file=sys.stderr) or 3)
 '''
 
@@ -121,12 +121,12 @@ def test_teardown_requires_context_and_namespace(cluster):
 
 
 # ---------------- poll_run.sh ----------------
-def _log(exp_dir, run_id, last_step, last_age_s, step_s=60):
-    """A train.log whose perf line of last_step is last_age_s old."""
+def _log(exp_dir, run_id, last_step, last_age_s, step_s=60, num_rollout=None):
+    """A train.log whose perf line of last_step is last_age_s old, with the argument dump's num_rollout if given."""
     d = exp_dir / run_id / "logs" / "20261001-000000"
     d.mkdir(parents=True)
     t_last = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(seconds=last_age_s)
-    lines = []
+    lines = ["  num_rollout ........................ %d" % num_rollout] if num_rollout is not None else []
     for t in range(last_step + 1):
         stamp = (t_last - dt.timedelta(seconds=(last_step - t) * step_s)).strftime("%Y-%m-%d %H:%M:%S")
         lines.append("[%s] train_metric_utils.py:1 - perf %d: {'perf/step_time': %d.0}" % (stamp, t, step_s))
@@ -158,12 +158,37 @@ def test_poll_running_done_and_stuck(cluster, tmp_path):
     assert r["status"] == "running" and r["latest_step"] == 6 and r["perf_lines_count"] == 7, r
     assert ["get", "pods", "-l", "job-name=alice-r1", "-o", "json"] in calls
     assert ["get", "pods", "-l", "ray.io/cluster=alice-r1-abcde", "-o", "json"] in calls
-    _log(exp, "alice-r2", last_step=13, last_age_s=30)
+    _log(exp, "alice-r2", last_step=19, last_age_s=30)   # the last step of a default 20-step run
     r, _ = _poll(cluster, tmp_path, "alice-r2", {"objects": {"rayjob/alice-r2": running()}})
     assert r["status"] == "done" and r["recommendation"] == "teardown", r
     _log(exp, "alice-r3", last_step=5, last_age_s=7200)
     r, _ = _poll(cluster, tmp_path, "alice-r3", {"objects": {"rayjob/alice-r3": running()}})
     assert r["status"] == "stuck" and r["recommendation"] == "triage" and r["secs_since_last_perf"] >= 7200, r
+
+
+def test_poll_target_follows_the_runs_own_num_rollout(cluster, tmp_path):
+    exp = tmp_path / "exp"
+    _log(exp, "alice-p1", last_step=19, last_age_s=30, num_rollout=23)   # profiled: setup 20, warm-up 21, record 22
+    r, _ = _poll(cluster, tmp_path, "alice-p1", {"objects": {"rayjob/alice-p1": running()}})
+    assert r["status"] == "running" and (r["target_step"], r["target_source"]) == (22, "num_rollout"), r
+    _log(exp, "alice-p2", last_step=22, last_age_s=30, num_rollout=23)
+    r, _ = _poll(cluster, tmp_path, "alice-p2", {"objects": {"rayjob/alice-p2": running()}})
+    assert r["status"] == "done", r
+    _log(exp, "alice-p3", last_step=19, last_age_s=30)                   # no dump yet: the RayJob spec
+    job = dict(running(), spec={"entrypoint": "python3 train.py \\\n  --num-rollout 24 \\\n  --seed 1"})
+    r, _ = _poll(cluster, tmp_path, "alice-p3", {"objects": {"rayjob/alice-p3": job}})
+    assert r["status"] == "running" and (r["target_step"], r["target_source"]) == (23, "num_rollout"), r
+    proj = tmp_path / "attune-projects" / "c1"
+    proj.mkdir(parents=True)
+    (proj / "tracked_jobs.jsonl").write_text('{"run_id": "alice-p3", "target_steps": 19}\n')
+    r, _ = _poll(cluster, tmp_path, "alice-p3", {"objects": {"rayjob/alice-p3": job}},
+                 AUTOTUNE_PROJECT_ROOT=str(tmp_path / "attune-projects"))
+    assert r["status"] == "running" and r["target_step"] == 23, r    # the run itself outranks a stale record
+    r, _ = _poll(cluster, tmp_path, "alice-p3", {"objects": {"rayjob/alice-p3": running()}},
+                 AUTOTUNE_PROJECT_ROOT=str(tmp_path / "attune-projects"))
+    assert r["status"] == "done" and r["target_source"] == "tracked_jobs", r
+    r, _ = _poll(cluster, tmp_path, "alice-p1", {"objects": {"rayjob/alice-p1": running()}}, TARGET_STEPS="19")
+    assert r["status"] == "done" and r["target_source"] == "TARGET_STEPS", r
 
 
 def test_poll_matches_pods_exactly(cluster, tmp_path):
@@ -201,6 +226,14 @@ def test_read_metrics_window_and_validity(cluster, tmp_path):
                                                 "'perf/actor_train_time': 9.0, 'perf/step_time': 15.0}")
     p, r, _ = _metrics(cluster, tmp_path, slow, "4", "13", "16")
     assert p.returncode == 4 and "timing check" in r["invalid_reason"]
+
+
+def test_read_metrics_default_window(cluster, tmp_path):
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=20), AUTOTUNE_NUM_GPUS="16")
+    assert p.returncode == 0 and r["valid"], p.stderr
+    assert r["window"] == [5, 19] and r["window_n"] == 15 and r["aggregate_tok_per_s_per_gpu"] == 56.25
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=23), AUTOTUNE_NUM_GPUS="16")   # a profiled run
+    assert p.returncode == 0 and r["window"] == [5, 19] and r["window_n"] == 15, p.stderr
 
 
 def test_read_metrics_through_the_log_pod(cluster, tmp_path):

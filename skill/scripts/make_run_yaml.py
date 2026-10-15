@@ -17,7 +17,8 @@ What it changes:
      contract of --benchmark (workload.py), and the profiler flags of --with-profiler. A --benchmark run is
      unprofiled unless --with-profiler is given.
   4. The hook chain (hook_chain.py) on every --benchmark or profiled run: the registry's default hooks, plus
-     profile_rank when the run is profiled per stage. --benchmark also writes AUTOTUNE_SEQ_LEN into the pod env.
+     profile_rank when the run is profiled per stage; --benchmark removes parity_probe from $ATTUNE_HOOKS and
+     writes AUTOTUNE_SEQ_LEN into the pod env.
   5. Structural env vars (--env NAME=VALUE, only the names env_rules.py classes structural: CUDA_DEVICE_MAX_CONNECTIONS,
      PYTORCH_CUDA_ALLOC_CONF, NCCL_ALGO, NCCL_PROTO, debug, dump and SLIME_PROFILE_* profiler switches) on every pod
      and in runtimeEnvYAML.
@@ -71,19 +72,29 @@ def parse_args(argv=None):
                          "is refused (the canonical-manifest rule)")
     ap.add_argument("--with-profiler", action="store_true",
                     help="enable the PyTorch profiler: target train_overall, active steps START..END-1 (default "
-                         "15-17), traces in $AUTOTUNE_EXPERIMENTS_DIR (default /shared/experiments)/<run_id>/profiles; "
+                         "22-23), traces in $AUTOTUNE_EXPERIMENTS_DIR (default /shared/experiments)/<run_id>/profiles; "
                          "needs an image whose slime or miles has profiler support")
     ap.add_argument("--benchmark", action="store_true",
                     help="apply the fixed-shape ranking contract of workload.py: GBS and RBS $AUTOTUNE_GBS (default "
-                         "128); --num-rollout $AUTOTUNE_NUM_STEPS (default 14: steps 0-3 discarded, 4-13 measured), or "
-                         "$AUTOTUNE_NUM_STEPS_PROFILED (default 17: the same window, then warmup step 14 and capture "
-                         "steps 15-16) with --with-profiler; --prompt-data $AUTOTUNE_DATASET when set (read through "
+                         "128); --num-rollout $AUTOTUNE_NUM_STEPS (default 20: steps 0-4 warm-up, 5-19 measured), or, with "
+                         "--with-profiler, the same window then the profiler's setup step 20, warm-up step 21 and "
+                         "--profile-capture recorded steps (default 1: step 22, so 23 steps); --prompt-data $AUTOTUNE_DATASET when set (read through "
                          "slime's global dataset, so a --disable-rollout-global-dataset is removed); AUTOTUNE_SEQ_LEN "
                          "(default 8192) in every pod's env for the rollout adapter. Profiler flags the baseline "
                          "carries are removed unless --with-profiler is given")
     ap.add_argument("--profile-steps", default=None, metavar="START-END",
-                    help="end-exclusive profile range for unranked diagnostics (default 15-17 with the default step "
-                         "counts); ranked --benchmark runs require the default")
+                    help="end-exclusive profile range for unranked diagnostics (default 22-23 with the default step "
+                         "counts). slime's profiler setup lands in step START-2, so START-2 must come after the "
+                         "$AUTOTUNE_NUM_STEPS steps of the measured window and the convergence check, and END may not "
+                         "exceed --num-rollout; ranked --benchmark runs require the range --profile-capture implies")
+    ap.add_argument("--profile-capture", type=int, choices=(1, 2, 3), default=None,
+                    help="recorded profiler steps of a profiled run after its setup and warm-up steps (default "
+                         "$AUTOTUNE_PROFILE_CAPTURE, else 1); ask for 2-3 when the step-time CV is high or something "
+                         "periodic is suspected")
+    ap.add_argument("--unchecked-num-rollout", action="store_true",
+                    help="profile although the YAML's --num-rollout is not a literal integer (a shell variable, or "
+                         "--num-epoch), so the profile range cannot be checked against the run length; you vouch that "
+                         "the run reaches END")
     ap.add_argument("--profile-ranks", choices=("stage", "all"), default="stage",
                     help="which ranks write traces on a profiled run. stage (default): one rank per pipeline stage, "
                          "through the hook chain's profile_rank hook; all: stock slime, every rank traces")
@@ -256,12 +267,12 @@ def apply_add(yaml_text: str, flag: str, value: str) -> str:
     return _append_cli(yaml_text, flag, value)
 
 
-def install_hook_chain(yaml_text: str, run_id: str, enable=()):
+def install_hook_chain(yaml_text: str, run_id: str, enable=(), disable=()):
     """Install the hook chain (hook_chain.py) on every pod: the registry's default hooks, plus `enable` (profile_rank
-    when this run is profiled per stage). Every ranked run carries the chain, profiled or not."""
+    when this run is profiled per stage), minus `disable`. Every ranked run carries the chain, profiled or not."""
     import yaml
     docs = [d for d in yaml.safe_load_all(yaml_text) if d is not None]
-    info = hook_chain.install(docs, run_id, enable=list(enable))
+    info = hook_chain.install(docs, run_id, enable=list(enable), disable=list(disable))
     msg = "hook chain %s in ConfigMap %s, %d containers" % (info["chain_sha256"][:12], info["configmap"], info["containers"])
     if "profile_rank" in enable:
         msg = "profiler ranks: one per pipeline stage (%s)" % msg
@@ -376,17 +387,47 @@ def benchmark_sets(text, wl, profiled):
     return text, sets
 
 
-def profiler_flags(text, run_id, steps, wl, benchmark):
-    """(flags, trace dir, (start, end)) of --with-profiler. A tensorboard dir the baseline already sets per run (it names the run id
-    or $RUN_ID) is kept, so traces of different runs never share a directory."""
+def _flag_int(text, flag):
+    """The integer value of the single `--flag` occurrence (quotes allowed), or None (absent, repeated, or a shell
+    variable)."""
+    ms = _flag_matches(text, flag)
+    if len(ms) != 1:
+        return None
+    v = ms[0].group(0)[len(flag) + 2:].lstrip("= \t")
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        v = v[1:-1]
+    return int(v) if v.isdigit() else None
+
+
+def parse_profile_steps(steps):
+    """(start, end) of an end-exclusive --profile-steps START-END."""
     try:
         start, end = (int(x) for x in steps.split("-"))
     except ValueError:
         raise RuntimeError(f"--profile-steps must be START-END (got {steps!r})") from None
     if start < 1 or end <= start:
         raise RuntimeError("--profile-steps requires 1 <= START < END")
-    if benchmark and (start, end) != (wl["profile_start"], wl["profile_end"]):
-        raise RuntimeError(f"ranked --benchmark runs require --profile-steps {wl['profile_start']}-{wl['profile_end']}")
+    return start, end
+
+
+def profiler_flags(text, run_id, steps, wl, prof, unchecked=False):
+    """(flags, trace dir, (start, end)) of --with-profiler. A tensorboard dir the baseline already sets per run (it names the run id
+    or $RUN_ID) is kept, so traces of different runs never share a directory. `prof` is workload.profiled() on a
+    --benchmark render, else None; `unchecked` accepts a --num-rollout that is not a literal integer."""
+    start, end = parse_profile_steps(steps)
+    if prof and (start, end) != (prof["profile_start"], prof["profile_end"]):
+        raise RuntimeError(f"ranked --benchmark runs require --profile-steps {prof['profile_start']}-{prof['profile_end']}")
+    if start - 2 < wl["num_steps"]:   # slime steps the profiler inside the step timer: setup in START-2, warm-up START-1
+        raise RuntimeError(f"--profile-steps {start}-{end}: the profiler's setup step {start - 2} falls inside steps "
+                           f"0-{wl['num_steps'] - 1} (measured window and convergence check); use START >= "
+                           f"{wl['num_steps'] + 2}")
+    n_roll = _flag_int(text, "num-rollout")
+    if n_roll is None and not unchecked:
+        raise RuntimeError(f"--profile-steps {start}-{end}: the YAML's --num-rollout is not one literal integer (a shell "
+                           "variable, repeated, or absent under --num-epoch), so the range cannot be checked against "
+                           "the run length; set it with --set num-rollout=N, or pass --unchecked-num-rollout")
+    if n_roll is not None and end > n_roll:
+        raise RuntimeError(f"--profile-steps {start}-{end} needs --num-rollout >= {end} (the run has {n_roll} steps)")
     exp_root = os.environ.get("AUTOTUNE_EXPERIMENTS_DIR") or "/shared/experiments"
     trace_dir = f"{exp_root}/{run_id}/profiles"
     tb = [m.group(0).split(None, 1)[-1].split("=", 1)[-1] for m in _flag_matches(text, "tensorboard-dir")]
@@ -411,12 +452,12 @@ def stamp_owner_text(text):
     return hook_chain.dump_yaml(stamp_owner([d for d in yaml.safe_load_all(text) if d is not None]))
 
 
-def build(args, base_text, wl):
-    """(output YAML, summary lines)."""
+def build(args, base_text, wl, prof=None):
+    """(output YAML, summary lines). `prof` is workload.profiled() when the run is profiled."""
     notes = []
     sets = list(args.set)
     if args.benchmark:
-        base_text, contract = benchmark_sets(base_text, wl, args.with_profiler)
+        base_text, contract = benchmark_sets(base_text, dict(wl, **(prof or {})), args.with_profiler)
         sets += contract
     base_run_id = infer_base_run_id(base_text)
     text = apply_name_suffix(base_text, base_run_id, args.run_id)
@@ -427,10 +468,12 @@ def build(args, base_text, wl):
     for spec in args.add:
         text = apply_add(text, *split_kv(spec))
     if args.with_profiler:
-        flags, trace_dir, (start, end) = profiler_flags(text, args.run_id, args.profile_steps, wl, args.benchmark)
+        flags, trace_dir, (start, end) = profiler_flags(text, args.run_id, args.profile_steps, wl,
+                                                        prof if args.benchmark else None, args.unchecked_num_rollout)
         for flag, value in flags:
             text = apply_set(text, flag, value)
-        notes.append(f"profiler on, active steps [{start},{end}) after one warmup step, trace -> {trace_dir}")
+        notes.append(f"profiler on, setup step {start - 2}, warm-up step {start - 1}, active steps [{start},{end}), "
+                     f"trace -> {trace_dir}")
     else:
         left = [f for f in PROFILER_FLAGS if _flag_matches(text, f)]
         if left:
@@ -445,8 +488,12 @@ def build(args, base_text, wl):
     profiled = bool(_flag_matches(text, "use-pytorch-profiler"))
     enable = ["profile_rank"] if profiled and args.profile_ranks == "stage" else []
     if args.benchmark or enable:
-        text, msg = install_hook_chain(text, args.run_id, enable)
+        # a benchmark run never loads the parity probe, even when its baseline was a probed arm
+        text, msg = install_hook_chain(text, args.run_id, enable, ["parity_probe"] if args.benchmark else [])
         notes.append(msg)
+        if args.benchmark and re.search(r"ATTUNE_HOOKS=\S*parity_probe", text):
+            raise RuntimeError("the baseline's script exports ATTUNE_HOOKS with parity_probe; a benchmark run is "
+                               "unprobed")
     notes.insert(0, f"base_run_id {base_run_id}, diffs applied: {len(sets)} set, {len(args.unset)} unset, "
                     f"{len(args.add)} add")
     return stamp_owner_text(text), notes
@@ -457,13 +504,32 @@ def main(argv=None):
     check_run_id(args.run_id)
     import workload
     wl = workload.resolve()
-    if args.profile_steps is None:
-        args.profile_steps = f"{wl['profile_start']}-{wl['profile_end']}"
-    out_text, notes = build(args, normalize_blocks(Path(args.base).read_text()), wl)
+    for given, name in ((args.profile_capture is not None, "--profile-capture"),
+                        (args.profile_steps is not None, "--profile-steps"),
+                        (args.unchecked_num_rollout, "--unchecked-num-rollout")):
+        if given and not args.with_profiler:
+            raise RuntimeError(f"{name} needs --with-profiler")
+    prof = None
+    if args.with_profiler and args.profile_steps is None:
+        # the default range: K from --profile-capture, else $AUTOTUNE_PROFILE_CAPTURE (validated only here)
+        prof = workload.profiled(wl, args.profile_capture)
+        args.profile_steps = f"{prof['profile_start']}-{prof['profile_end']}"
+    elif args.with_profiler:
+        start, end = parse_profile_steps(args.profile_steps)
+        if args.profile_capture is not None and args.profile_capture != end - start:
+            raise RuntimeError(f"--profile-capture {args.profile_capture} disagrees with --profile-steps "
+                               f"{args.profile_steps} ({end - start} recorded steps); pass one of them")
+        if args.benchmark:   # a ranked run's explicit range fixes K
+            try:
+                prof = workload.profiled(wl, end - start)
+            except ValueError:
+                raise RuntimeError(f"ranked --benchmark runs record 1-{workload.MAX_PROFILE_CAPTURE} steps; "
+                                   f"--profile-steps {args.profile_steps} records {end - start}") from None
+    out_text, notes = build(args, normalize_blocks(Path(args.base).read_text()), wl, prof)
     Path(args.out).write_text(out_text)
     print(f"Wrote {args.out} (run {args.run_id}, owner label {'='.join(owner())})")
     if args.benchmark:
-        steps = wl["num_steps_profiled"] if args.with_profiler else wl["num_steps"]
+        steps = prof["num_steps_profiled"] if prof else wl["num_steps"]
         notes.append(f"workload: GBS {wl['gbs']}, rows of {wl['seq_len']} tokens, {steps} steps "
                      f"({'profiled' if args.with_profiler else 'unprofiled'}; window {wl['window_start']}-"
                      f"{wl['window_end']}, target step {steps - 1}), dataset {wl['dataset'] or '(baseline)'}")

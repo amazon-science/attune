@@ -7,7 +7,8 @@ Python imports only the first sitecustomize.py on PYTHONPATH, so hooks are never
 `install()` puts the loader (pod_hooks/sitecustomize.py), the rendered registry (attune_chain.json) and every
 registered hook (hook_<name>.py) into the run's ConfigMap, mounts them read-only at the registry's mount_dir
 on every RayJob container, puts that directory first on PYTHONPATH (container env, runtimeEnvYAML, and any
-`export PYTHONPATH=` in the training script), and adds the requested hooks to $ATTUNE_HOOKS.
+`export PYTHONPATH=` in the training script), and adds the requested hooks to $ATTUNE_HOOKS (removing any it is
+told to disable).
 make_run_yaml.py and make_parity_arm.py call install(); the command line does the same for a single YAML:
 
     hook_chain.py install <in.yaml> <out.yaml> [--enable a,b] [--run-id ID]
@@ -79,8 +80,8 @@ def _walk_strings(node, fn):
             _walk_strings(v, fn)
 
 
-def _merge_hooks(current, enable):
-    names = [x.strip() for x in str(current or "").split(",") if x.strip()]
+def _merge_hooks(current, enable, disable=()):
+    names = [x.strip() for x in str(current or "").split(",") if x.strip() and x.strip() not in disable]
     for e in enable:
         if e not in names:
             names.append(e)
@@ -102,7 +103,7 @@ def _chain_configmap(docs, run_id, job):
     return cm
 
 
-def _set_container(c, mdir, vol, enable):
+def _set_container(c, mdir, vol, enable, disable=()):
     mounts = c.setdefault("volumeMounts", [])
     mounts[:] = [m for m in mounts if m.get("mountPath") != mdir and m.get("name") != vol]
     mounts.append({"name": vol, "mountPath": mdir, "readOnly": True})
@@ -118,10 +119,10 @@ def _set_container(c, mdir, vol, enable):
     if he is None:
         env.append({"name": HOOK_ENV, "value": _merge_hooks("", enable)})
     else:
-        he["value"] = _merge_hooks(he.get("value"), enable)
+        he["value"] = _merge_hooks(he.get("value"), enable, disable)
 
 
-def _set_runtime_env(job, mdir, enable):
+def _set_runtime_env(job, mdir, enable, disable=()):
     import yaml
     spec = job.get("spec") or {}
     if not spec.get("runtimeEnvYAML"):
@@ -130,7 +131,7 @@ def _set_runtime_env(job, mdir, enable):
     ev = r.setdefault("env_vars", {})
     if "PYTHONPATH" in ev:  # a job-level PYTHONPATH overrides the pod env for Ray workers
         ev["PYTHONPATH"] = _prefix(ev["PYTHONPATH"], mdir)
-    ev[HOOK_ENV] = _merge_hooks(ev.get(HOOK_ENV), enable)
+    ev[HOOK_ENV] = _merge_hooks(ev.get(HOOK_ENV), enable, disable)
     spec["runtimeEnvYAML"] = yaml.safe_dump(r, sort_keys=False)
 
 
@@ -158,11 +159,12 @@ def _prefix_exports(docs, cm, chain_keys, mdir):
     return len(edits)
 
 
-def install(docs, run_id, enable=(), reg=None):
-    """Install the chain into parsed YAML docs (in place). Returns a summary dict."""
+def install(docs, run_id, enable=(), reg=None, disable=()):
+    """Install the chain into parsed YAML docs (in place); `disable` names are removed from an $ATTUNE_HOOKS the
+    manifest already carries. Returns a summary dict."""
     reg = reg or registry()
     known = {h["name"] for h in reg["hooks"]}
-    bad = [e for e in enable if e not in known]
+    bad = [e for e in list(enable) + list(disable) if e not in known]
     if bad:
         raise RuntimeError("unknown hook(s) %s; registered: %s" % (bad, sorted(known)))
     jobs = [d for d in docs if isinstance(d, dict) and d.get("kind") == "RayJob"]
@@ -180,9 +182,9 @@ def install(docs, run_id, enable=(), reg=None):
             vols[:] = [v for v in vols if v.get("name") != vol]
             vols.append({"name": vol, "configMap": {"name": cm["metadata"]["name"], "items": items}})
             for c in pod.get("containers") or []:
-                _set_container(c, mdir, vol, enable)
+                _set_container(c, mdir, vol, enable, disable)
                 n += 1
-        _set_runtime_env(job, mdir, enable)
+        _set_runtime_env(job, mdir, enable, disable)
     if n == 0:
         raise RuntimeError("hook chain: no pod containers found in the RayJob")
     return {"chain_sha256": chain, "configmap": cm["metadata"]["name"], "containers": n,

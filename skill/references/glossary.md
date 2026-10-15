@@ -17,7 +17,7 @@ rule in source (arguments.py / parallel_state.py) rather than trusting a remembe
 - **bs** — global batch size (`--global-batch-size`). Workload-coupled (affects convergence); NOT a pure throughput knob.
 - **mt** — max-tokens-per-gpu (`--max-tokens-per-gpu`). With `--use-dynamic-batch-size`, packs variable-length samples into microbatches; the main fixed-bs throughput knob.
 - **microbatch** — one forward/backward chunk; `num_microbatches` per step ≈ tokens-per-step / (DP × mt) — only DP replicas consume separate microbatches (TP/CP cooperate on the same one, PP pipelines the same set), so it's DP, not world, in the denominator.
-- **tok/s/GPU** — the north-star metric: `aggregate_tok_per_s_per_gpu = total_tokens / total_step_time / num_gpus` over the fixed-shape measured window (steps 4-13 at the default step count).
+- **tok/s/GPU** — the north-star metric: `aggregate_tok_per_s_per_gpu = total_tokens / total_step_time / num_gpus` over the fixed-shape measured window (steps 5-19 at the default step count).
 - **MFU** — Model FLOPs Utilization: achieved FLOPs / peak GPU FLOPs. Far below dense-training levels for comm-bound large-MoE SFT, even when well-tuned.
 - **IQR** — inter-quartile range (`p75 − p25`) of step times; a measure of how much step time varies within a run. Wide IQR / bimodal step times signal instability (per-rank memory or JIT pressure).
 
@@ -25,5 +25,5 @@ rule in source (arguments.py / parallel_state.py) rather than trusting a remembe
 - **slime** — the RL/SFT training wrapper around Megatron used here (rollout + actor-train loop).
 - **SGLang** — the inference engine slime uses for rollout generation.
 - **rollout** — the generation phase each step (trivial in SFT; dominant in RL). `actor_train` is the training phase.
-- **fixed-shape run** — one N-step job (`AUTOTUNE_NUM_STEPS`, default 14 unprofiled / 17 profiled) over rows of exactly `AUTOTUNE_SEQ_LEN` tokens (default 8K): discard steps 0-3 and measure steps 4..13 (the same window profiled or not); a profiled run adds the profiler warm-up step 14 and the captured steps 15-16; no persistent Triton cache is restored or published.
+- **fixed-shape run** — one N-step job (`AUTOTUNE_NUM_STEPS`, default 20 unprofiled / 23 profiled) over rows of exactly `AUTOTUNE_SEQ_LEN` tokens (default 8K): discard warm-up steps 0-4 and measure steps 5..19 (the same window profiled or not); a profiled run adds the profiler's setup step 20, its warm-up step 21 and the captured step 22 (up to 22-24); steps 0-19 of an unprofiled run also serve the correctness check; no persistent Triton cache is restored or published.
 - **EFA** — AWS Elastic Fabric Adapter (the inter-node NIC fabric); intranode uses NVLink/NVSwitch instead.

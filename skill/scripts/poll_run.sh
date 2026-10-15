@@ -15,9 +15,11 @@
 #                             newest <dir>/<run_id>/logs/<timestamp>/train.log
 #   AUTOTUNE_PROJECT_ROOT     default $PWD/attune-projects; <root>/*/tracked_jobs.jsonl is searched for the run's
 #                             `target_steps`
-#   TARGET_STEPS              the last 0-indexed step of a complete run; overrides tracked_jobs.jsonl. Default:
-#                             AUTOTUNE_NUM_STEPS - 1 (13 at the default 14 steps). A profiled run ends at
-#                             AUTOTUNE_NUM_STEPS_PROFILED - 1 (16), so record that in its tracked_jobs.jsonl entry.
+#   TARGET_STEPS              the last 0-indexed step of a complete run; overrides everything below
+#
+# The target step (the last 0-indexed step of a complete run) is TARGET_STEPS, else the run's own --num-rollout - 1
+# (the log's resolved-argument dump, else the RayJob spec), else its tracked_jobs.jsonl `target_steps`, else
+# AUTOTUNE_NUM_STEPS - 1. So a profiled run (23 steps at the defaults) is done at step 22, not at the window's end.
 #
 # Pods are matched exactly: the submitter Job's pods by the label job-name=<run_id>, and the Ray cluster's pods by
 # ray.io/cluster=<the RayJob's status.rayClusterName>, so run ids that share a prefix never mix.
@@ -25,7 +27,7 @@
 # Prints one JSON object:
 #   run_id, status (setup|running|stuck|errored|done|done-unknown|absent|api-error), reason, driver_pod_phase,
 #   rayjob_status, rayjob_deployment, log_path, perf_lines_count, latest_step, first_perf_at,
-#   secs_since_last_perf, first_error_line, recommendation (wait|triage|teardown|retry)
+#   secs_since_last_perf, first_error_line, target_step, target_source, recommendation (wait|triage|teardown|retry)
 # api-error means the cluster API could not be read (auth, context, timeout): retry, never treat it as absent or done.
 # A run with no new perf line for 10 minutes is stuck (triage), however long the silence.
 
@@ -71,7 +73,7 @@ fi
 # The newest log directory, then the perf, error and traceback lines of its train.log (values pass as arguments).
 LOG_PATTERN='train_metric_utils.*perf |Traceback \(most recent call last\)|DistBackendError|OutOfMemoryError'
 LOG_PATTERN+='|AssertionError|RuntimeError|St12length_error|ActorUnavailableError|store->get.*timeout'
-LOG_PATTERN+='|wandb.*BrokenPipeError|BrokenPipeError.*wandb|wandb/sdk/lib'
+LOG_PATTERN+='|wandb.*BrokenPipeError|BrokenPipeError.*wandb|wandb/sdk/lib|num_rollout \.{3,} '
 LOG_PATH=""
 LATEST=$("${KUBECTL[@]}" exec "$LOG_POD" -- ls -t -- "$EXP_DIR/$RUN_ID/logs" 2>/dev/null | head -1 || true)
 if [ -n "$LATEST" ] && [[ "$LATEST" != */* ]]; then
@@ -98,6 +100,8 @@ REAL = re.compile(r"DistBackendError|OutOfMemoryError|AssertionError|RuntimeErro
 TRACEBACK = "Traceback (most recent call last)"
 WANDB_PIPE = re.compile(r"wandb.*BrokenPipeError|BrokenPipeError.*wandb|wandb/sdk/lib")
 STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+NUM_ROLLOUT_ARG = re.compile(r"\bnum_rollout \.{3,} (\d+)\s*$")
+NUM_ROLLOUT_FLAG = re.compile(r"--num-rollout[= ]+(\d+)\b")
 STUCK_S = 600
 
 
@@ -109,13 +113,27 @@ def load(path):
         return {}
 
 
-def target_step():
-    """TARGET_STEPS, else the run's tracked_jobs.jsonl `target_steps`, else the unprofiled last step."""
+def own_num_rollout(lines, rj):
+    """The run's --num-rollout: the log's resolved-argument dump, else one value in the RayJob spec; None if unknown."""
+    for x in lines:
+        m = NUM_ROLLOUT_ARG.search(x)
+        if m:
+            return int(m.group(1))
+    found = set(NUM_ROLLOUT_FLAG.findall(json.dumps(rj.get("spec") or {})))
+    return int(found.pop()) if len(found) == 1 else None
+
+
+def target_step(lines, rj):
+    """(target, source): TARGET_STEPS, else the run's own --num-rollout - 1, else its tracked_jobs.jsonl
+    `target_steps`, else the unprofiled last step."""
     if os.environ.get("TARGET_STEPS", "").strip():
         try:
-            return int(os.environ["TARGET_STEPS"])
+            return int(os.environ["TARGET_STEPS"]), "TARGET_STEPS"
         except ValueError:
             sys.exit("poll_run.sh: TARGET_STEPS=%r is not an integer" % os.environ["TARGET_STEPS"])
+    n = own_num_rollout(lines, rj)
+    if n is not None:
+        return n - 1, "num_rollout"
     for path in sorted(glob.glob(os.path.join(root, "*", "tracked_jobs.jsonl"))):
         with open(path, errors="ignore") as f:
             for line in f:
@@ -124,8 +142,8 @@ def target_step():
                 except ValueError:
                     continue
                 if isinstance(e, dict) and e.get("run_id") == run_id and e.get("target_steps") is not None:
-                    return int(e["target_steps"])
-    return workload.resolve()["target_step"]
+                    return int(e["target_steps"]), "tracked_jobs"
+    return workload.resolve()["target_step"], "workload"
 
 
 def first_error(lines):
@@ -201,12 +219,14 @@ def main():
          "driver": ((newest or {}).get("status") or {}).get("phase"),
          "pending": sum((p.get("status") or {}).get("phase") == "Pending" for p in pods),
          "perf": perf, "latest": latest, "secs": secs, "error": first_error(lines)}
-    status, reason, rec = classify(f, target_step())
+    target, source = target_step(lines, rj)
+    status, reason, rec = classify(f, target)
     print(json.dumps({
         "run_id": run_id, "status": status, "reason": reason, "driver_pod_phase": f["driver"],
         "rayjob_status": f["rj_status"], "rayjob_deployment": f["deployment"], "log_path": log_path or None,
         "perf_lines_count": perf, "latest_step": latest, "first_perf_at": first_ts, "secs_since_last_perf": secs,
-        "first_error_line": f["error"][:500] or None, "recommendation": rec,
+        "first_error_line": f["error"][:500] or None, "target_step": target, "target_source": source,
+        "recommendation": rec,
     }, indent=2))
 
 

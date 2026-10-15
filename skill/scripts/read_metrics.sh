@@ -6,8 +6,8 @@
 # Usage:
 #   read_metrics.sh <train_log_path> [step_start] [step_end] [num_gpus]
 #
-# Defaults: step_start=$AUTOTUNE_WINDOW_START (4), step_end=N-1 for an N-step unprofiled run ($AUTOTUNE_NUM_STEPS,
-# default 14): the canonical fixed-shape window (discard the startup steps, measure the rest; see measurement.md).
+# Defaults: step_start=$AUTOTUNE_WINDOW_START (5), step_end=N-1 for an N-step unprofiled run ($AUTOTUNE_NUM_STEPS,
+# default 20): the canonical fixed-shape window (discard the startup steps, measure the rest; see measurement.md).
 # num_gpus is REQUIRED: pass it as arg 4 or export $AUTOTUNE_NUM_GPUS (a wrong or absent denominator silently corrupts
 # the headline tok/s/GPU).
 # Primary metric is aggregate_tok_per_s_per_gpu = total_tokens / total_step_time / num_gpus across the window, the
@@ -23,18 +23,18 @@
 # not be read (kubectl or file error).
 #
 # Examples (64 GPUs):
-#   read_metrics.sh <experiments_dir>/<run_id>/logs/<ts>/train.log 4 13 64   # through $AUTOTUNE_LOG_POD
-#   read_metrics.sh /tmp/train.log 4 13 64                                   # a local copy, with AUTOTUNE_LOG_POD unset
+#   read_metrics.sh <experiments_dir>/<run_id>/logs/<ts>/train.log 5 19 64   # through $AUTOTUNE_LOG_POD
+#   read_metrics.sh /tmp/train.log 5 19 64                                   # a local copy, with AUTOTUNE_LOG_POD unset
 
 set -euo pipefail
 
 case "${1:-}" in -h|--help) sed -n '4,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;; esac
 
 LOG_PATH="${1:?usage: read_metrics.sh <train_log_path> [step_start] [step_end] <num_gpus>}"
-# Default window WINDOW_START..N-1 of the unprofiled layout (4-13 by default; see workload.py). A profiled run
+# Default window WINDOW_START..N-1 of the unprofiled layout (5-19 by default; see workload.py). A profiled run
 # measures the same window, so the defaults apply to both.
-_N_STEPS="${AUTOTUNE_NUM_STEPS:-14}"
-STEP_START="${2:-${AUTOTUNE_WINDOW_START:-4}}"
+_N_STEPS="${AUTOTUNE_NUM_STEPS:-20}"
+STEP_START="${2:-${AUTOTUNE_WINDOW_START:-5}}"
 STEP_END="${3:-$(( _N_STEPS - 1 ))}"
 NUM_GPUS="${4:-${AUTOTUNE_NUM_GPUS:-}}"
 if [ -z "$NUM_GPUS" ]; then

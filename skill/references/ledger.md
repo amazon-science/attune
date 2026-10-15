@@ -25,7 +25,7 @@ in the example are illustrative placeholders, not results.)
   "status": "completed",
   "objective_class": "structural",
   "verified_from_source": "<file:line per changed flag>",
-  "metrics": {"aggregate_tok_per_s_per_gpu": 0.0, "window": [4, 13], "valid": true,
+  "metrics": {"aggregate_tok_per_s_per_gpu": 0.0, "window": [5, 19], "valid": true,
               "step_time_stats": {"mean_s": 0.0, "cv_pct": 0.0, "p50_s": 0.0, "min_s": 0.0, "max_s": 0.0}},
   "verdict": "win",
   "compared_leader_run_id": "exp-0014-tp2-pp2",
@@ -52,10 +52,12 @@ in the example are illustrative placeholders, not results.)
 
 **Field reference** (required unless noted):
 - `run_id` — unique in project; suffix for all K8s names; ≤47 chars.
-- `kind` — `baseline | ranked | parity | unranked | stop`. `baseline`: the baseline benchmark run (a failed attempt
-  at it keeps `kind: "baseline"` with `status: "errored"`). `ranked`: a candidate benchmark run. `parity`: a
-  correctness-check arm. `unranked`: a diagnostic run that is not a candidate (a longer profile, a feasibility
-  probe). `stop`: the STOP row below.
+- `kind` — `baseline | ranked | confirm | parity | unranked | stop`. `baseline`: the baseline benchmark run (a failed
+  attempt at it keeps `kind: "baseline"` with `status: "errored"`). `ranked`: a candidate benchmark run. `confirm`:
+  the one unprofiled rerun of a recipe whose ranked run was profiled, made only to give the final correctness check
+  its candidate side (SKILL.md "Final correctness check"); not ranked, no budget slot, counted in GPU-hours.
+  `parity`: a diagnostic correctness-check arm (`make_parity_arm.py`). `unranked`: a diagnostic run that is not a
+  candidate (a longer profile, a feasibility probe). `stop`: the STOP row below.
 - `launched_at` — ISO-8601 UTC (ledger-entry time, not pod-up time).
 - `base_run` — run_id this is diffed from; `null` for the baseline.
 - `hypothesis` — full sentence: what you expect and why. `prediction` — numeric range.
@@ -65,15 +67,15 @@ in the example are illustrative placeholders, not results.)
 - `status` — `launching | running | completed | killed | errored`.
 - `metrics` *(required on a completed benchmark row)* — the JSON `read_metrics.sh` printed for the measured window,
   copied unchanged. `aggregate_tok_per_s_per_gpu` is the ranked number; `window` is the fixed measurement window
-  ([4, 13] at the default step count); `step_time_stats` and `means_in_window` carry the step-time distribution and
+  ([5, 19] at the default step count); `step_time_stats` and `means_in_window` carry the step-time distribution and
   the window means of the `perf N:` fields. Add `peak_gpu_mem_gb` when you read it from the log.
 - `verdict` *(terminal, on `ranked` rows)* — `win | tie | lose | error | killed`, decided by the band of SKILL.md
   "Verdict" (no throughput rerun of a tie).
 - `compared_leader_run_id`, `delta_vs_leader_pct` *(required for a ranked terminal row)* — the leader and delta used for the verdict at completion time. This matters when concurrent jobs finish after another result has already promoted a new leader.
 - `delta_vs_baseline_pct` *(required for a ranked terminal row)* — end-to-end gain against the original fixed-allocation baseline.
-- `gpuh`, `gpuh_cumulative` *(terminal; required in GPU-hour budget mode, SKILL.md "When to stop")* — this run's GPU-hours (`num_gpus x` admission -> job end, copied from the run's completed `gpuh.jsonl` line (`scripts/run_gpuh.py <run_id> --record`, before teardown); 0 if never admitted) and the campaign total after it, summed over every row: baseline, ranked, failed, killed and correctness-check (`kind: parity`) runs. One row per run_id carries its `gpuh`.
+- `gpuh`, `gpuh_cumulative` *(terminal; required in GPU-hour budget mode, SKILL.md "When to stop")* — this run's GPU-hours (`num_gpus x` admission -> job end, copied from the run's completed `gpuh.jsonl` line (`scripts/run_gpuh.py <run_id> --record`, before teardown); 0 if never admitted) and the campaign total after it, summed over every row: baseline, ranked, confirm, failed, killed and correctness-check (`kind: parity`) runs. One row per run_id carries its `gpuh`.
 - `objective_class` *(required on a WIN row)* — `structural` (placement/scheduling only, including packing / `--max-tokens-per-gpu` / `--micro-batch-size` changes, also with a per-microbatch MoE aux loss) `same_math` (a fusion, kernel or dispatcher implementation, optimizer offload or other same-function swap: shippable only where the setup's allowlist lists it) or `numeric` (touches gradient/optimizer/precision/loss/routing/batch — see the objective-preserving Invariant in SKILL.md). A `numeric` win is never shipped; a `same_math` one only with the allowlist entry and `parity_checked:true`.
-- `parity_checked` *(required before shipping any recipe)* — `true` only when the correctness check (`scripts/correctness/PROTOCOL.md`: 20-step baseline and candidate arms from `make_parity_arm.py`, scored by `parity_verdict.py`) PASSes for this recipe vs the baseline. Record both arm run_ids and the per-layer result in `what_i_learned`. **Do not label a recipe/change "training-neutral" anywhere (recipe header, RESULTS.md, PR) unless this is true.**
+- `parity_checked` *(required before shipping any recipe)* — `true` only when the correctness check (`scripts/correctness/PROTOCOL.md`: the baseline's and this recipe's own unprofiled benchmark runs, paired by `pair_from_runs.py` and scored by `parity_verdict.py`) PASSes for this recipe vs the baseline. Record both run_ids (the recipe's side is its ranked run, or its `confirm` run when the ranked run was profiled) and the per-layer result in `what_i_learned`. **Do not label a recipe/change "training-neutral" anywhere (recipe header, RESULTS.md, PR) unless this is true.**
 - `verified_from_source` *(required whenever a run changes any flag)* — the `file:line`(s) in the running image's `arguments.py`/source where you confirmed each changed flag's resolved behavior (what it sets/asserts, and what it silently overrides). Per SKILL.md loop step L2, no flag is tried un-read; this field records that you read it. Guards against memory/hallucination and silent flag-override (e.g. grad-reduce-in-bf16).
 - `profiled` *(required on a terminal row)* — `true` when the run was launched with the profiler (`--with-profiler`), else `false`. Profiling is per launch, so this records which runs carry a trace.
 - `profile_reason` *(required on a terminal row)* — one line: why this run was profiled, or why it did not need a trace (e.g. "baseline: first diagnosis", "value sweep on an already diagnosed lever").
@@ -125,7 +127,7 @@ appear as SKILL.md Invariants/gotchas — repeated here as a scan-able checklist
 9. **No checkpoints in benchmark runs** — drop `--save/--load/--save-interval` (not just `--no-save-optim`). MoE checkpoints are ~TB-scale; a sweep fills the shared filesystem and hangs mid-save.
 
 **Status & measurement**
-10. **Never trust `RayJob SUCCEEDED` alone** — confirm `latest_step` reached the run's `target_steps` (13 unprofiled, 16 profiled, at the defaults); a swallowed actor crash reports SUCCEEDED. (`poll_run.sh` flags this.)
+10. **Never trust `RayJob SUCCEEDED` alone** — confirm `latest_step` reached the run's `target_steps` (19 unprofiled, 22 profiled with one recorded step, at the defaults); a swallowed actor crash reports SUCCEEDED. (`poll_run.sh` flags this.)
 11. **Never rerun a throughput tie.** Only a gain above the band (SKILL.md "Verdict") over the current leader is promoted. Record a tie and spend the next slot on a new hypothesis.
 12. **Read `train_wait_time` before blaming rollout/topology for a big `step_time_max`** — a p50→max ratio of many times is usually JIT compile-tail, not a stall (misdiagnosing it can wrongly steer away from higher PP).
 12b. **Never classify a flag as objective-preserving from memory — read the RESOLVED config in the image's `arguments.py`.** `--grad-reduce-in-bf16` is easy to call "training-neutral" on the belief it only changes the wire dtype; in Megatron (`megatron/training/arguments.py`: `if args.grad_reduce_in_bf16: args.accumulate_allreduce_grads_in_fp32 = False`) it force-nulls fp32 accumulation, silently overriding that flag even when also set → gradients accumulate in bf16 → a potential training-quality regression. Any numeric lever needs source-verification (`verified_from_source` file:line) + a PASS of the correctness check (`scripts/correctness/PROTOCOL.md`) before it's called neutral.
@@ -145,18 +147,19 @@ One JSON object per line, one per **in-flight** run. Append a line when you laun
 only after that run's terminal ledger row is written **and** teardown succeeds (see SKILL.md state
 contract). The file is transient scratch state — the ledger is the permanent record.
 
-Only `run_id` is read by the scripts to poll and match a run; `target_steps` is read by
-`poll_run.sh` to detect a truncated or false-`SUCCEEDED` run. Everything else is
-the agent's own bookkeeping, carried onto the ledger row at completion.
+Only `run_id` is read by the scripts to poll and match a run. `target_steps` is a fallback: `poll_run.sh` takes a
+run's completion step from its own `--num-rollout` and reads `target_steps` only when neither the log nor the RayJob
+shows it (and `TARGET_STEPS` overrides both). Everything else is the agent's own bookkeeping, carried onto the ledger
+row at completion.
 
 | field | required | purpose |
 |---|---|---|
 | `run_id` | **yes** | RayJob name and poll key; `poll_run.sh` matches on it. Unique per project, ≤47 chars. |
-| `target_steps` | no | Completion marker: the LAST 0-indexed step a full run reaches (= `--num-rollout − 1`, since steps run `0…N−1`), compared directly against `latest_step` to catch a truncated/false-SUCCEEDED run. 13 for an unprofiled throughput run and 16 for a profiled one (at the default step counts, `scripts/workload.py`); 19 for a 20-step correctness-check arm. Omitted → `$AUTOTUNE_NUM_STEPS − 1`; env `TARGET_STEPS` overrides. |
-| `kind` | no | `baseline` / `ranked` / `parity` / `unranked`; copied to the ledger row's `kind`, which drives budget accounting (§1). |
+| `target_steps` | no | Completion marker: the LAST 0-indexed step a full run reaches (= `--num-rollout − 1`, since steps run `0…N−1`), compared directly against `latest_step` to catch a truncated/false-SUCCEEDED run. At the default step counts (`scripts/workload.py`): 19 for an unprofiled run (benchmark, confirm or 20-step correctness-check arm) and 21+K for a profiled one with K recorded steps (22, 23 or 24). `poll_run.sh` reads the run's own `--num-rollout` first, so this is the fallback when the run's log and RayJob do not show it; env `TARGET_STEPS` overrides both. |
+| `kind` | no | `baseline` / `ranked` / `confirm` / `parity` / `unranked`; copied to the ledger row's `kind`, which drives budget accounting (§1). |
 | `yaml_path` | no | The run YAML applied (for reproduce / teardown). |
 | `hypothesis`, `topology` | no | Agent notes; copied to the ledger row on completion. |
 | `launched_at` | no | ISO-8601 launch time; helps spot stuck runs and reconcile drift. |
 
 Extra keys are allowed and ignored by the scripts. Example line:
-`{"run_id":"alice-mymodel-cp2","kind":"ranked","topology":"TP4/PP4/CP2/EP16/DP2","target_steps":13,"hypothesis":"CP4->CP2 removes CP all-gather volume"}`
+`{"run_id":"alice-mymodel-cp2","kind":"ranked","topology":"TP4/PP4/CP2/EP16/DP2","target_steps":19,"hypothesis":"CP4->CP2 removes CP all-gather volume"}`

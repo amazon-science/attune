@@ -47,8 +47,8 @@ B0. Find authoritative recipes for the model (exact model, then nearest architec
     topology, batch, seq-len, precision, recompute, offload in `RESULTS.md`, noting what transfers.
 B1. Swap in the ranking workload. The workload comes from the environment (`scripts/workload.py`):
     GBS `$AUTOTUNE_GBS` (default 128), rows of exactly `$AUTOTUNE_SEQ_LEN` tokens (default 8,192),
-    dataset `$AUTOTUNE_DATASET`, and `$AUTOTUNE_NUM_STEPS` steps per unprofiled run (default 14; a profiled
-    run gets `$AUTOTUNE_NUM_STEPS_PROFILED`, default 17). Without these
+    dataset `$AUTOTUNE_DATASET`, and `$AUTOTUNE_NUM_STEPS` steps per unprofiled run (default 20; a profiled
+    run adds the profiler's setup and warm-up steps and `$AUTOTUNE_PROFILE_CAPTURE` recorded steps, default 1, so 23). Without these
     set, the workload is fixed-8K at GBS 128: repoint the recipe (`--prompt-data`) at the model's
     fixed-8K dataset and set GBS=128 — its own dataset/GBS are NOT what we rank on. Fixed-8K
     datasets live under `$AUTOTUNE_DATA_ROOT/<model_tag>-sft-fixed8192-v1/train.parquet` (one per
@@ -66,10 +66,10 @@ B2. GPU count = the recipe's own count, fixed for the whole campaign: the GPU co
     divisibility, `global_batch_size >= DP`, and the image's ACTUAL expert rank-fold placement (verify
     from source/`print_topology.md`, never an `ETP × EP` mnemonic). A fit/feasibility failure is
     ledgered unranked (not a tuning slot).
-B3. Run one benchmark job (`$AUTOTUNE_NUM_STEPS` steps, default 14; 17 if you profile it) at that count as the baseline, applying only the operational fixes needed to
+B3. Run one unprofiled benchmark job (`$AUTOTUNE_NUM_STEPS` steps, default 20) at that count as the baseline (profile it in a separate run if you want a trace), applying only the operational fixes needed to
     run on the frozen data+count (drop checkpointing, strip a `NCCL_PROTO` pin, adjust topology to
     fit) — objective and GPU count unchanged. No tuning until it lands. Its tok/s/GPU is the
-    denominator every Δ% is measured against AND the correctness-check baseline; every run keeps its GPU count.
+    denominator every Δ% is measured against AND the reference side of the final correctness check; every run keeps its GPU count.
     Its ledger row has `kind: "baseline"` and `status: "completed"`; every candidate's terminal row has
     `kind: "ranked"`, its `verdict` and the `metrics` JSON `read_metrics.sh` printed (`references/ledger.md` §1;
     these are the fields the Stop hook counts).
@@ -121,11 +121,12 @@ L3. check_gpu_capacity.py (`--baseline <yaml>` counts the run's tolerations) →
     queue (don't shrink to fit).
     make_run_yaml.py --benchmark → stamps the fixed-shape contract onto the YAML (Invariants); verify
     the output, append a
-    `tracked_jobs.jsonl` row with `target_steps` = the run's last step (13 unprofiled, 16 profiled, at the
+    `tracked_jobs.jsonl` row with `target_steps` = the run's last step (19 unprofiled, 22 profiled, at the
     defaults) → `kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" apply -f <run.yaml>`
     (GPU-hour budget mode: then `run_gpuh.py <run_id> --launch --gpus N`). (`target_steps` is the
     completion marker: the LAST 0-indexed step a full run reaches — steps run 0…N-1, so
-    `--num-rollout 14` ⇒ last step 13 — used to reject a SUCCEEDED-but-truncated run.)
+    `--num-rollout 20` ⇒ last step 19 — used to reject a SUCCEEDED-but-truncated run. `poll_run.sh` takes it
+    from the run's own `--num-rollout` when the log or RayJob shows it, and prints the `target_step` it used.)
 L4. On each finished run, do BOTH:
     (a) **Finalize** — in the exact "State & idempotency contract" order so an interrupted finalize
         resumes safely: read_metrics.sh → verdict (table below) → append ledger + rewrite RESULTS.md
@@ -170,17 +171,22 @@ L5. Goto L1.
 - **Fixed-shape ranking.** One benchmark job per recipe on frozen rows of exactly the workload's row
   length (`$AUTOTUNE_SEQ_LEN`, default 8,192 tokens), with identical dataset bytes/order, seeds,
   objective, GBS (`$AUTOTUNE_GBS`, default 128), hardware type, image, and code across candidates;
-  `--num-rollout` N = `$AUTOTUNE_NUM_STEPS` (default 14), or `$AUTOTUNE_NUM_STEPS_PROFILED` (17) when the run
-  is profiled. **The GPU count is fixed at the baseline's count**: a tuned recipe runs on the recipe's own GPU
+  `--num-rollout` N = `$AUTOTUNE_NUM_STEPS` (default 20, at least 20), or N+2+K (default 23) when the run is profiled
+  with K recorded steps. **The GPU count is fixed at the baseline's count**: a tuned recipe runs on the recipe's own GPU
   count, since at a smaller count per-GPU throughput can rise while aggregate throughput falls. `make_run_yaml.py`
   refuses any other count (`$AUTOTUNE_NUM_GPUS`, else the base YAML's own count) unless
   `AUTOTUNE_ALLOW_GPU_COUNT_CHANGE=1`, an explicit opt-in. Everything else stays identical too.
-- **Measurement window, the same for every run.** Discard steps 0-3, measure steps 4..N-1 (4-13, 10 samples, at
-  the default N=14) via `read_metrics.sh <log> 4 13 <num_gpus>` — always pass the real `num_gpus` (a wrong count
+- **Measurement window, the same for every run.** Discard warm-up steps 0-4, measure steps 5..N-1 (5-19, 15 samples,
+  at the default N=20) via `read_metrics.sh <log> 5 19 <num_gpus>` — always pass the real `num_gpus` (a wrong count
   silently corrupts the headline); never rank an invalid/incomplete window. A profiled run measures the SAME
-  window and then warms the profiler at step N and captures N+1..M-1 (`--profile-step-start 15
-  --profile-step-end 17` at the defaults, end exclusive), after the window; an unprofiled run carries no profiler
-  flag. The last step is 13 unprofiled and 16 profiled; a run that ends earlier is incomplete.
+  window, then spends step N on the profiler's setup and step N+1 on its warm-up (slime steps the profiler inside
+  the step's timer, so both are slower) and records K steps N+2..N+1+K (`--profile-step-start 22
+  --profile-step-end 23` at the defaults, end exclusive); `make_run_yaml.py --profile-capture 2|3` records up to
+  three steps when the step-time CV is high or something periodic is suspected, and refuses any profile range whose
+  setup step falls inside steps 0..N-1 or that runs past `--num-rollout`. An unprofiled run carries no profiler
+  flag. The last step is 19 unprofiled and 22 profiled (one recorded step); a run that ends earlier is incomplete.
+  Benchmark runs never load the correctness probe: `make_run_yaml.py --benchmark` removes `parity_probe` from
+  `$ATTUNE_HOOKS`.
 - **Frozen arguments.** When `$AUTOTUNE_FROZEN_ARGS` names a frozen-arguments file
   (`scripts/correctness/frozen_args.py`), those arguments keep their frozen values in every run:
   `make_run_yaml.py` refuses a run that sets them otherwise, and correctness layer 1 fails any
@@ -206,7 +212,7 @@ L5. Goto L1.
     the frozen-arguments file `$AUTOTUNE_FROZEN_ARGS` (by convention `rules/layer1/<setup>/`,
     `scripts/correctness/rules/README.md`), plus `rules/images/<digest prefix>/allowlist.yaml` for swaps
     tested on the image, which apply to every model on it when the pair's `images.json` (written by
-    `make_parity_arm.py --pair <dir> --arm base|win`) names that image for both arms. Every other swap is numeric by default and fails layer 1. Read both allowlists before
+    `pair_from_runs.py`) names that image, pinned by digest, for both runs. Every other swap is numeric by default and fails layer 1. Read both allowlists before
     you propose one.
   - *Numeric (different math or lower precision → never shipped):* anything changing the dtype/value of
     gradients, optimizer state, accumulation, precision (FP8), loss, expert routing/capacity,
@@ -232,10 +238,14 @@ baseline run.
 | −b … +b | **tie** — document it, do not rerun, and move to a new experiment |
 | < −b | **lose** |
 | crashed before any `perf N:` | **error** (triage: `references/failure_triage.md`) |
-| RayJob SUCCEEDED but `latest_step` below the run's target (13 unprofiled, 16 profiled) | **error** — incomplete benchmark or a swallowed actor crash; never trust SUCCEEDED alone |
+| RayJob SUCCEEDED but `latest_step` below the run's target (19 unprofiled, 22 profiled) | **error** — incomplete benchmark or a swallowed actor crash; never trust SUCCEEDED alone |
 
-Each recipe gets one throughput run — reruns aren't part of search or convergence. For concurrent
-completions, compare against the leader at ledger-commit time and record that run ID.
+Each recipe gets one ranked run; reruns are not part of search or convergence. The one other run a recipe can get is
+a **confirm run**: when a recipe's ranked run was profiled and the recipe reaches the final correctness check, run it
+once more unprofiled (`kind: "confirm"`, ledger.md), because a profiled run is never a correctness arm. A confirm
+run gives the check its candidate side and nothing else: it takes no budget slot, does not count toward
+convergence, and its throughput is recorded but never re-ranks the recipe. It costs GPU-hours like any launch. For
+concurrent completions, compare against the leader at ledger-commit time and record that run ID.
 
 **Budget accounting** (N-ranked mode, the default; GPU-hour mode: see When to stop). The N-slot budget counts only runs that produced a **valid ranked
 `tok/s/GPU`** (win / tie / lose) — those are your real shots at the best recipe. A run that produces
@@ -305,7 +315,7 @@ enough", or <N ranked recipes are NOT stops. A persistent goal/runbook/budget ma
 fixed cap, not a target to spend:
 - *Accounting.* Every launch costs `num_gpus x (admission -> job end)` GPU-h (admission = the Kueue
   Workload's admission time on a Kueue cluster, else the RayJob's start time): baseline, ranked
-  runs, failures (OOM, crash, invalid, incomplete) and correctness-check arms. Queue time before
+  runs, confirm runs, failures (OOM, crash, invalid, incomplete) and correctness-check arms. Queue time before
   admission is free; a launch rejected before admission costs 0. Log every launch in `gpuh.jsonl`:
   `scripts/run_gpuh.py <run_id> --launch --gpus N` right after `kubectl apply` (parity arms too), and
   `scripts/run_gpuh.py <run_id> --record --status <done|failed|oom|killed>` in finalize, before
@@ -332,31 +342,37 @@ fixed cap, not a target to spend:
   memory by at least 10%; inside that margin, launch it), a divisibility claim also holds for uneven
   pipeline splits, and a predicted loss is a hypothesis to test, not evidence. The final correctness check then runs
   exactly as at the cap.
-- *Cascade inside the budget.* The final correctness check spends from B too. Keep a reserve for it (a
-  baseline arm plus at least two candidate arms at 20 steps, costed from your own runs' admission -> end
-  times) and start the cascade when the remaining budget reaches it or when you declare convergence. The
-  shipped recipe is the best one that passes within B; if none passes within B, ship the baseline.
+- *Cascade inside the budget.* The final correctness check reuses runs you already have, so it spends from B only
+  when a candidate's ranked run was profiled and needs its confirm run. Keep a reserve of two such runs (costed
+  from your own runs' admission -> end times) and start the cascade when the remaining budget reaches it or when you
+  declare convergence. The shipped recipe is the best one that passes within B; if none passes within B, ship the
+  baseline.
 - Record B, the accounting rule and the running total in the `RESULTS.md` header. Without a budget
   set, the N-ranked rule above is the default. Under the unattended harness (`AUTOTUNE_AUTONOMOUS=1`)
   the Stop gate reads only `$AUTOTUNE_GPUH_BUDGET`, so a header budget there must equal it; it accepts the
   cap or a STOP row.
 
 **Before declaring the goal complete — final correctness check (cascade).** Test the leaderboard
-top-down with the correctness check (`scripts/correctness/PROTOCOL.md`): a 20-step baseline arm and a 20-step arm of
-the current leader, both made with `scripts/correctness/make_parity_arm.py` (same data, seed, benchmark GBS
-and image; count probe on every pod), then `scripts/correctness/parity_verdict.py` on the pair.
+top-down with the correctness check (`scripts/correctness/PROTOCOL.md`), on runs you already have: the baseline's
+unprofiled benchmark run is the reference side and the candidate's own unprofiled benchmark run is the candidate side
+(same data, seed, benchmark GBS, image and `--num-rollout`, scored on steps 0-19). Copy both `train.log`s off the log
+pod, make the pair with `scripts/correctness/pair_from_runs.py --base-log <log> --base-yaml <yaml> --win-log <log>
+--win-yaml <yaml> --pair <dir>` (`--allow-image-change` only when the recipe itself changes the image), then run
+`scripts/correctness/parity_verdict.py` on it. A candidate whose ranked run was profiled first gets its confirm run
+(Verdict §). Probe arms (`scripts/correctness/make_parity_arm.py`) are for diagnosing a failing pair, not for the
+verdict.
 Layer 1: resolved-argument diff with no numeric change (by the frozen rule lists,
 `scripts/correctness/PROTOCOL.md`) and no frozen-argument violation.
 Layer 2: the candidate's per-step training loss over the 20 steps against the baseline's, by Megatron-Bridge's
 convergence check (`scripts/correctness/mbridge_convergence.py`, with the fixed thresholds of
-`scripts/correctness/PROTOCOL.md`); the probe's per-step counts and the step-0 loss and grad-norm differences are
-reported beside it.
+`scripts/correctness/PROTOCOL.md`); the step-0 loss and grad-norm differences are reported beside it (and the probe's
+per-step counts when the runs carry the probe).
 **Pass** (layers 1 and 2)
 → that recipe is the shipped winner; set `parity_checked:true`. **Fail** → mark it `parity_failed`
-with the failing layer, drop it, and test the next-best ranked recipe against the same baseline arm;
+with the failing layer, drop it, and test the next-best ranked recipe against the same baseline run;
 repeat until one passes. If **none** pass, ship the baseline and report "no promotable winner". This
 applies to structural leaders too (TP/PP/EP/CP changes alter reduction order), so no recipe is
-declared the winner without a recorded PASS. If capacity blocks an arm, queue it and wait: an unrun
+declared the winner without a recorded PASS. If capacity blocks a needed unprofiled run, queue it and wait: an unrun
 check stays open and does not pass. The thresholds and the 20-step window are fixed; never change them
 after seeing a result. Infrastructure failures are relaunched and give no verdict.
 
@@ -435,7 +451,8 @@ its `profile_analyzer/` package) into your campaign directory and change or repl
 next decision (your copy lives and dies with this campaign). Run your own helpers as `python3 <file>` or
 `bash <file>` with the file inside the campaign directory (not `-c`, `-m` or stdin). What a recipe SCORES, and
 whether it ships, never comes from your copy: `read_metrics.sh`, the correctness check
-(`correctness/make_parity_arm.py`, `correctness/parity_verdict.py`), `run_gpuh.py` and `calibration.py` are frozen
+(`correctness/pair_from_runs.py`, `correctness/parity_verdict.py`, and `correctness/make_parity_arm.py` for
+diagnostic arms), `run_gpuh.py` and `calibration.py` are frozen
 and authoritative, so only their results decide the shipped recipe. Leave the skill
 directory unchanged except for the two records you add to it, the only writes the unattended harness allows
 there: lever rules appended to `references/levers.md` (L4c) and the closeout summary
@@ -452,8 +469,8 @@ Listed in the order you use them in a cycle — what each does and when to call 
   image/nodeAffinity; `--benchmark` adds `AUTOTUNE_SEQ_LEN` and the hook chain's mount, `PYTHONPATH` prefix and
   `ATTUNE_HOOKS` to the pods; `--env` sets a structural env var). Call at **loop
   step L3** to generate each experiment; `--benchmark` applies the fixed-shape contract from
-  `scripts/workload.py` (GBS/RBS, `--num-rollout N`, dataset; the profiler warm-up and capture steps after the
-  measured window only with `--with-profiler`). In-pod hooks
+  `scripts/workload.py` (GBS/RBS, `--num-rollout N`, dataset; the profiler's setup, warm-up and capture steps
+  after the measured window only with `--with-profiler`). In-pod hooks
   (profiler rank selection, correctness probe) load through one sitecustomize chain
   (`scripts/hook_chain.py`). Another `sitecustomize.py` goes after the chain's directory on `PYTHONPATH`, never in
   front of it; the chain runs it once after its own hooks, and that file must then run the image's own
@@ -463,7 +480,7 @@ Listed in the order you use them in a cycle — what each does and when to call 
   (`wait/triage/teardown/retry`). Call **every ~10 min** for each `tracked_jobs.jsonl` entry, then act on status
   per the state contract.
 - **`read_metrics.sh <log> <start> <end> <num_gpus>`** — parses `train.log`, aggregates `tok/s/GPU`
-  over the step window (default 4–13) with a validity gate (`valid:false` / non-zero exit on a bad or
+  over the step window (default 5–19) with a validity gate (`valid:false` / non-zero exit on a bad or
   incomplete window). Call at **loop step L4** on completion to get the ranked number.
 - **`analyze_profile.py --profile-dir <dir> [--top-n N] [--json]`** (an aid you may modify in your campaign
   dir) — per-rank step decomposition, per-stage pipeline and host-side memory-management (allocator cleanup)
@@ -472,12 +489,15 @@ Listed in the order you use them in a cycle — what each does and when to call 
   the log-access pod first (full fetch-and-run recipe: `measurement.md` §6). Call at **loop step L4** on a
   profiled run (`--json` fills the ledger's `profile_top_categories`). Descriptive only — map the dominant
   category to a lever via `levers.md` §c + `measurement.md` §6; it does not recommend flags.
-- **`correctness/make_parity_arm.py --base <run.yaml> --run-id <arm> --out <arm.yaml>`** and
-  **`correctness/parity_verdict.py <pair_dir>`** — make a 20-step correctness-check arm (count probe
-  mounted on every pod) and score a baseline/candidate pair on layers 1 and 2. Call at the final
-  cascade (When to stop); protocol in `scripts/correctness/PROTOCOL.md`.
+- **`correctness/pair_from_runs.py --base-log <log> --base-yaml <yaml> --win-log <log> --win-yaml <yaml> --pair <dir>`** and
+  **`correctness/parity_verdict.py <pair_dir>`** — make a correctness-check pair from two finished unprofiled
+  benchmark runs and score it on layers 1 and 2. Call at the final cascade (When to stop); protocol in
+  `scripts/correctness/PROTOCOL.md`. **`correctness/make_parity_arm.py`** makes a 20-step probe arm (count probe on
+  every pod) when a failing pair needs diagnosing.
 - **`calibration.py [--require]`** — the band b and the baseline denominator from `$AUTOTUNE_CALIBRATION`
-  (Verdict §; the file is optional); call it once before the first verdict.
+  (Verdict §; the file is optional, and is refused unless its `num_steps` and `window` stamps match the campaign's
+  workload); call it once before the first verdict. `calibration.py build` writes a stamped file from >= 5 baseline
+  replicates; `calibration.py stamp` records the stamps of a file written before they existed.
 - **`run_gpuh.py <run_id> [--launch --gpus N | --record --status S] | --total`** — GPU-h a run has
   consumed (`num_gpus x` admission -> job end: the Kueue Workload's admission time when the cluster
   runs Kueue, else the RayJob's start time; running jobs charged to now) and the campaign's

@@ -7,6 +7,7 @@ environment, and it then runs for real in the campaign directory. The fake kubec
 RayJobs and ConfigMaps in a state file (every RayJob has already succeeded), and runs `exec <log pod> -- <cmd>`
 locally, so the test's files play the shared volume. The Stop hook blocks until the agent's STOP row.
 Run: python3 -m pytest harness/tests"""
+import importlib.util
 import json
 import os
 import shlex
@@ -124,21 +125,24 @@ def test_one_campaign_through_the_documented_loop(campaign, monkeypatch):
         assert p.returncode == 0, p.stderr
         return p.stdout
 
+    logs = {}
+
     def run(run_id: str, kind: str, extra: str = "") -> dict:
         yaml_path = f"proj-h100/yamls/{run_id}.yaml"
-        log = exp / run_id / "logs" / "20261012-000000" / "train.log"
+        log = logs[run_id] = exp / run_id / "logs" / "20261012-000000" / "train.log"
         log.parent.mkdir(parents=True)
-        log.write_text(fixtures.train_log(steps=14, counts=False))  # what the job's tee writes
+        log.write_text(fixtures.train_log(steps=20, counts=False, args={"num_rollout": "20"}))  # the job's tee
         agent(f"python3 {SKILL}/make_run_yaml.py --base proj-h100.yaml --run-id {run_id} --out {yaml_path} "
               f"--benchmark {extra}")
         assert "free=3" in agent(f"python3 {SKILL}/check_gpu_capacity.py --baseline {yaml_path}")
-        track = json.dumps({"run_id": run_id, "kind": kind, "target_steps": 13})
+        track = json.dumps({"run_id": run_id, "kind": kind, "target_steps": 19})
         agent(f"echo {shlex.quote(track)} >> proj-h100/tracked_jobs.jsonl")
         agent(f'kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" apply -f {yaml_path}')
         agent(f"python3 {SKILL}/run_gpuh.py {run_id} --launch --gpus {GPUS}")
         poll = json.loads(agent(f"bash {SKILL}/poll_run.sh {run_id}"))
         assert poll["status"] == "done" and poll["log_path"] == str(log), poll
-        metrics = json.loads(agent(f"bash {SKILL}/read_metrics.sh {poll['log_path']} 4 13 {GPUS}"))
+        assert (poll["target_step"], poll["target_source"]) == (19, "num_rollout"), poll
+        metrics = json.loads(agent(f"bash {SKILL}/read_metrics.sh {poll['log_path']} 5 19 {GPUS}"))
         assert metrics["valid"] and metrics["aggregate_tok_per_s_per_gpu"] == 37.5, metrics
         spent = json.loads(agent(f"python3 {SKILL}/run_gpuh.py {run_id} --record --status done"))
         assert spent["gpuh"] == 12.0, spent
@@ -159,6 +163,19 @@ def test_one_campaign_through_the_documented_loop(campaign, monkeypatch):
                   delta_vs_baseline_pct=0.0))
     out = stop_gate()
     assert "Campaign not converged" in out and "24.0/100 GPU-h spent, 1 ranked results" in out, out
+
+    # the final correctness check pairs the two unprofiled benchmark runs: no new launch
+    agent("mkdir -p proj-h100/parity")
+    for side, rid in (("base", "alice-tune-proj-h100-base"), ("win", "alice-tune-proj-h100-tp1")):
+        agent(f'kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" exec "$AUTOTUNE_LOG_POD" -- '
+              f"cat {logs[rid]} > proj-h100/parity/{side}_run.log")
+    agent(f"python3 {SKILL}/correctness/pair_from_runs.py --base-log proj-h100/parity/base_run.log "
+          "--base-yaml proj-h100/yamls/alice-tune-proj-h100-base.yaml --win-log proj-h100/parity/win_run.log "
+          "--win-yaml proj-h100/yamls/alice-tune-proj-h100-tp1.yaml --pair proj-h100/parity/tp1")
+    assert json.loads((root / "proj-h100" / "parity" / "tp1" / "gpus.json").read_text()) == {"base": GPUS, "win": GPUS}
+    if importlib.util.find_spec("numpy"):
+        verdict = agent(f"python3 {SKILL}/correctness/parity_verdict.py proj-h100/parity/tp1")
+        assert "tp1: PASS" in verdict and "probe counts off" in verdict, verdict
     stop = {"kind": "stop", "declared_at": "2026-10-12T01:00:00Z", "stop_reason": "agent_stop",
             "gpuh_cumulative": 24.0, "reason": "e2e check", "leader": "alice-tune-proj-h100-base",
             "neighbours": [{"run_id": "alice-tune-proj-h100-tp1", "axis": "TP2 -> TP1"}],

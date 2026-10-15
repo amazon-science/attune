@@ -112,7 +112,126 @@ def test_benchmark_on_exec_tee_script(tmp_path):
     assert p.returncode == 0, p.stderr
     f = flags(out)
     assert f["tensor_model_parallel_size"] == ["6"] and f["pipeline_model_parallel_size"] == ["5"]
-    assert f["num_rollout"] == ["17"] and f["global_batch_size"] == ["128"] and f["profile_step_start"] == ["15"]
+    # 20 unprofiled steps, then profiler setup (step 20), warm-up (21) and one recorded step (22)
+    assert f["num_rollout"] == ["23"] and f["global_batch_size"] == ["128"] and f["profile_step_start"] == ["22"]
+    assert f["profile_step_end"] == ["23"]
+
+
+def test_benchmark_profile_capture(tmp_path):
+    prof = ("--benchmark", "--with-profiler", "--profile-ranks", "all")
+    for extra, env, (n, start, end) in ((("--profile-capture", "3"), {}, (25, 22, 25)),
+                                        ((), {"AUTOTUNE_PROFILE_CAPTURE": "2"}, (24, 22, 24)),
+                                        (("--profile-capture", "1"), {"AUTOTUNE_PROFILE_CAPTURE": "3"}, (23, 22, 23))):
+        p, out = make(tmp_path, SCRIPT, "alice-tune-r3", *prof, *extra, **env)
+        assert p.returncode == 0, p.stderr
+        f = flags(out)
+        assert (f["num_rollout"], f["profile_step_start"], f["profile_step_end"]) == ([str(n)], [str(start)], [str(end)])
+    p, out = make(tmp_path, SCRIPT, "alice-tune-r4", "--benchmark", AUTOTUNE_PROFILE_CAPTURE="7")
+    assert p.returncode == 0, p.stderr          # a bad capture setting never blocks an unprofiled render
+    f = flags(out)
+    assert f["num_rollout"] == ["20"] and "profile_step_start" not in f
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", *prof, AUTOTUNE_PROFILE_CAPTURE="7")
+    assert p.returncode == 1 and "outside 1..3" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", *prof, "--profile-capture", "4")
+    assert p.returncode == 2 and "invalid choice" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", "--benchmark", "--profile-capture", "2")
+    assert p.returncode == 1 and "--profile-capture needs --with-profiler" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", "--benchmark", AUTOTUNE_NUM_STEPS="14")
+    assert p.returncode == 1 and "below the minimum 20" in p.stderr
+
+
+def test_profile_range_stays_after_the_measured_steps(tmp_path):
+    for steps, n_roll, why in (("15-17", "30", "setup step 13 falls inside steps 0-19"),
+                               ("21-22", "30", "setup step 19 falls inside steps 0-19"),
+                               ("22-26", "24", "needs --num-rollout >= 26")):
+        p, _ = make(tmp_path, SCRIPT, "alice-tune-d1", "--with-profiler", "--profile-ranks", "all",
+                    "--profile-steps", steps, "--set", "num-rollout=" + n_roll)
+        assert p.returncode == 1 and why in p.stderr, (steps, p.stderr)
+    p, out = make(tmp_path, SCRIPT, "alice-tune-d1", "--with-profiler", "--profile-ranks", "all",
+                  "--profile-steps", "40-42", "--set", "num-rollout=42")
+    assert p.returncode == 0 and flags(out)["profile_step_start"] == ["40"], p.stderr
+    p, out = make(tmp_path, SCRIPT, "alice-tune-d2", "--benchmark", "--with-profiler", "--profile-steps", "22-24")
+    assert p.returncode == 0 and flags(out)["num_rollout"] == ["24"], p.stderr   # an explicit range fixes K = 2
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-d2", "--benchmark", "--with-profiler", "--profile-steps", "21-23")
+    assert p.returncode == 1 and "require --profile-steps 22-24" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-d2", "--benchmark", "--with-profiler", "--profile-steps", "22-26")
+    assert p.returncode == 1 and "record 1-3 steps" in p.stderr
+
+
+def test_capture_setting_is_read_only_for_the_default_range(tmp_path):
+    p, out = make(tmp_path, SCRIPT, "alice-tune-c1", "--benchmark", "--with-profiler", "--profile-ranks", "all",
+                  "--profile-steps", "22-23", AUTOTUNE_PROFILE_CAPTURE="9")
+    assert p.returncode == 0 and flags(out)["profile_step_end"] == ["23"], p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-c2", "--with-profiler", "--profile-steps", "40-41",
+                "--set", "num-rollout=41", AUTOTUNE_PROFILE_CAPTURE="9")
+    assert p.returncode == 0, p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-c3", "--benchmark", "--with-profiler", AUTOTUNE_PROFILE_CAPTURE="9")
+    assert p.returncode == 1 and "outside 1..3" in p.stderr                    # the default range reads it
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-c4", "--benchmark", "--with-profiler", "--profile-steps", "22-23",
+                "--profile-capture", "2")
+    assert p.returncode == 1 and "disagrees with --profile-steps 22-23" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-c5", "--benchmark", "--profile-steps", "22-23")
+    assert p.returncode == 1 and "--profile-steps needs --with-profiler" in p.stderr
+
+
+def test_profiled_render_needs_a_checkable_num_rollout(tmp_path):
+    prof = ("--with-profiler", "--profile-ranks", "all", "--profile-steps", "22-23")
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-n1", *prof)                    # --num-epoch 1, no --num-rollout
+    assert p.returncode == 1 and "not one literal integer" in p.stderr and "--unchecked-num-rollout" in p.stderr
+    p, out = make(tmp_path, SCRIPT, "alice-tune-n1", *prof, "--unchecked-num-rollout")
+    assert p.returncode == 0 and flags(out)["profile_step_start"] == ["22"], p.stderr
+    variable = SCRIPT.replace("--num-epoch 1", "--num-rollout $NUM_ROLLOUT")
+    p, _ = make(tmp_path, variable, "alice-tune-n2", *prof)
+    assert p.returncode == 1 and "not one literal integer" in p.stderr
+    quoted = SCRIPT.replace("--num-epoch 1", '--num-rollout "23"')
+    p, _ = make(tmp_path, quoted, "alice-tune-n3", *prof)
+    assert p.returncode == 0, p.stderr                                         # a quoted literal is checked
+    p, _ = make(tmp_path, quoted, "alice-tune-n3", "--with-profiler", "--profile-ranks", "all", "--profile-steps", "22-25")
+    assert p.returncode == 1 and "needs --num-rollout >= 25 (the run has 23 steps)" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-n4", "--benchmark", "--unchecked-num-rollout")
+    assert p.returncode == 1 and "--unchecked-num-rollout needs --with-profiler" in p.stderr
+
+
+PROFILE_FLAGS = {"num_rollout", "use_pytorch_profiler", "profile_target", "profile_step_start", "profile_step_end",
+                 "tensorboard_dir"}
+
+
+def test_profiled_and_unprofiled_renders_differ_only_in_profile_flags(tmp_path):
+    (tmp_path / "u").mkdir()
+    (tmp_path / "p").mkdir()
+    pu, unprof = make(tmp_path / "u", SCRIPT, "alice-tune-r6", "--benchmark", "--set", "seed=7")
+    pp, prof = make(tmp_path / "p", SCRIPT, "alice-tune-r6", "--benchmark", "--set", "seed=7", "--with-profiler",
+                    "--profile-ranks", "all")
+    assert pu.returncode == 0 and pp.returncode == 0, pu.stderr + pp.stderr
+    fu, fp = flags(unprof), flags(prof)
+    assert {k for k in set(fu) | set(fp) if fu.get(k) != fp.get(k)} <= PROFILE_FLAGS
+    assert fu["num_rollout"] == ["20"] and fp["num_rollout"] == ["23"]
+
+    def rest(text):   # every document with the training script reduced to its non-flag lines
+        docs = [d for d in yaml.safe_load_all(text) if d]
+        for d in docs:
+            if d.get("kind") == "ConfigMap" and "run.sh" in (d.get("data") or {}):
+                d["data"]["run.sh"] = [x for x in d["data"]["run.sh"].splitlines() if "--" not in x]
+        return docs
+    assert rest(unprof) == rest(prof)
+
+
+def test_benchmark_render_drops_the_parity_probe(tmp_path):
+    probed = SCRIPT.replace("              image: img@sha256:abc\n",
+                            "              image: img@sha256:abc\n"
+                            "              env: [{name: ATTUNE_HOOKS, value: \"parity_probe,profile_rank\"}]\n")
+    probed = probed.replace("  entrypoint: bash /scripts/run.sh\n", "  entrypoint: bash /scripts/run.sh\n"
+                            "  runtimeEnvYAML: |\n    env_vars:\n      ATTUNE_HOOKS: parity_probe\n")
+    p, out = make(tmp_path, probed, "alice-tune-r7", "--benchmark")
+    assert p.returncode == 0, p.stderr
+    docs = [d for d in yaml.safe_load_all(out) if d]
+    job = next(d for d in docs if d["kind"] == "RayJob")
+    env = job["spec"]["rayClusterSpec"]["headGroupSpec"]["template"]["spec"]["containers"][0]["env"]
+    assert next(e["value"] for e in env if e["name"] == "ATTUNE_HOOKS") == "profile_rank"
+    assert yaml.safe_load(job["spec"]["runtimeEnvYAML"])["env_vars"]["ATTUNE_HOOKS"] == ""
+    exported = SCRIPT.replace("    echo done\n", "    echo done\n    export ATTUNE_HOOKS=parity_probe\n")
+    p, _ = make(tmp_path, exported, "alice-tune-r8", "--benchmark")
+    assert p.returncode == 1 and "exports ATTUNE_HOOKS with parity_probe" in p.stderr
 
 
 def test_frozen_check_ignores_comments():

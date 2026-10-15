@@ -211,6 +211,102 @@ def test_verdict_short_log_and_no_pairs(tmp_path):
     assert p.returncode == 2 and res is None and "no pair directory" in p.stderr
 
 
+def _pair_from_runs(tmp_path, base, win, *extra, base_yaml=fixtures.BASE_YAML, win_yaml=fixtures.BASE_YAML):
+    """pair_from_runs.py on two run logs and their YAMLs (None = leave the file out)."""
+    paths = {}
+    for name, text in (("base_run.log", base), ("win_run.log", win), ("base_run.yaml", base_yaml),
+                       ("win_run.yaml", win_yaml)):
+        paths[name] = tmp_path / name
+        if text is not None:
+            paths[name].write_text(text)
+    return subprocess.run([sys.executable, str(CORRECTNESS / "pair_from_runs.py"),
+                           "--base-log", str(paths["base_run.log"]), "--base-yaml", str(paths["base_run.yaml"]),
+                           "--win-log", str(paths["win_run.log"]), "--win-yaml", str(paths["win_run.yaml"]),
+                           "--pair", str(tmp_path / "pair"), *extra], capture_output=True, text=True)
+
+
+RUN = {"num_rollout": "20", "use_pytorch_profiler": "False"}
+
+
+def test_pair_from_benchmark_runs_scores_without_new_arms(tmp_path):
+    (tmp_path / "pair").mkdir()
+    (tmp_path / "pair" / "gpus.json").write_text('{"base": 1, "win": 1}\n')   # stale, from an earlier pair
+    p = _pair_from_runs(tmp_path, fixtures.train_log(args=RUN, counts=False),
+                        fixtures.train_log(args=dict(RUN, tensor_model_parallel_size="4"), counts=False))
+    assert p.returncode == 0, p.stderr
+    pair = tmp_path / "pair"
+    assert (pair / "base.log").exists() and (pair / "win.log").exists()
+    assert json.loads((pair / "gpus.json").read_text()) == {"base": 24, "win": 24}
+    assert json.loads((pair / "images.json").read_text()) == {"base": "registry.example.com/img@sha256:abc",
+                                                               "win": "registry.example.com/img@sha256:abc"}
+    q, res = _verdict(pair, tmp_path)
+    assert q.returncode == 0 and res[0]["PASS"] and res[0]["count_steps"] == 0, q.stdout
+    assert "probe counts off" in q.stdout
+    assert res[0]["base_tok_s_gpu"] == 1000.0 * 9.0 / 10.0 / 24   # logged tokens / step time / GPUs over 5-19
+
+
+def test_pair_from_runs_refuses_profiled_short_or_mismatched_runs(tmp_path):
+    def refused(*a, **kw):
+        d = tmp_path / ("case%d" % len(list(tmp_path.iterdir())))
+        d.mkdir()
+        p = _pair_from_runs(d, *a, **kw)
+        assert p.returncode == 1 and not (d / "pair").exists(), p.stderr
+        return p.stderr
+    ok = fixtures.train_log(args=RUN)
+    assert "win: the run is profiled" in refused(ok, fixtures.train_log(args=dict(RUN, use_pytorch_profiler="True")))
+    assert "base: missing the training loss of steps [14" in refused(fixtures.train_log(args=RUN, steps=14), ok)
+    assert "--num-rollout differs (20 vs 22)" in refused(ok, fixtures.train_log(args=dict(RUN, num_rollout="22")))
+    assert "base: no log at" in refused(None, ok)
+    assert "win: no run YAML at" in refused(ok, ok, win_yaml=None)
+    no_rollout = fixtures.train_log(args={"use_pytorch_profiler": "False"})
+    assert "win: the argument dump has no numeric num_rollout" in refused(ok, no_rollout)
+    other = fixtures.BASE_YAML.replace("img@sha256:abc", "img@sha256:def")
+    assert "the runs used different images" in refused(ok, ok, win_yaml=other)
+    (tmp_path / "allowed").mkdir()
+    p = _pair_from_runs(tmp_path / "allowed", ok, ok, "--allow-image-change", win_yaml=other)
+    assert p.returncode == 0, p.stderr
+    assert json.loads((tmp_path / "allowed" / "pair" / "images.json").read_text())["win"].endswith("sha256:def")
+
+
+def _yaml_with(edit):
+    """fixtures.BASE_YAML after edit(rayjob) on its parsed RayJob."""
+    import yaml
+    docs = [d for d in yaml.safe_load_all(fixtures.BASE_YAML) if d]
+    edit(next(d for d in docs if d["kind"] == "RayJob"))
+    return yaml.safe_dump_all(docs)
+
+
+def _groups(job):
+    rcs = job["spec"]["rayClusterSpec"]
+    return [rcs["headGroupSpec"]] + rcs["workerGroupSpecs"]
+
+
+def test_pair_from_runs_reads_the_ray_containers_image(tmp_path):
+    ok, img = fixtures.train_log(args=RUN), "registry.example.com/img@sha256:abc"
+
+    def sidecars(job):   # a log shipper beside Ray, and a submitter pod on another image
+        _groups(job)[0]["template"]["spec"]["containers"].append({"name": "logs", "image": "fluent-bit:3"})
+        job["spec"]["submitterPodTemplate"] = {"spec": {"containers": [{"name": "submit", "image": "ray-submit:1"}]}}
+
+    def mixed(job):      # the worker group's Ray container runs another image
+        _groups(job)[1]["template"]["spec"]["containers"][0]["image"] = "registry.example.com/img@sha256:def"
+    cases = {}
+    for name, extra, base_yaml in (("sidecar", (), _yaml_with(sidecars)), ("mixed", (), _yaml_with(mixed)),
+                                   ("named", ("--image", img), _yaml_with(mixed)),
+                                   ("wrong", ("--image", "registry.example.com/x:1"), _yaml_with(mixed)),
+                                   ("unknown", ("--allow-image-change",), _yaml_with(mixed))):
+        d = tmp_path / name
+        d.mkdir()
+        p = _pair_from_runs(d, ok, ok, *extra, base_yaml=base_yaml)
+        images = json.loads((d / "pair" / "images.json").read_text()) if p.returncode == 0 else None
+        cases[name] = (p.returncode, images, p.stderr)
+    assert cases["sidecar"][:2] == (0, {"base": img, "win": img}), cases["sidecar"]
+    assert cases["mixed"][0] == 1 and "runs several training images" in cases["mixed"][2]
+    assert cases["named"][:2] == (0, {"base": img, "win": img}), cases["named"]
+    assert cases["wrong"][0] == 1 and "--image" in cases["wrong"][2]
+    assert cases["unknown"][:2] == (0, {"base": None, "win": img}) and "recorded as unknown" in cases["unknown"][2]
+
+
 def test_couplings_fail_closed():
     import couplings
     require = {"id": "tp_overlap", "when": "tp_comm_overlap", "require": {"sequence_parallel": True}}

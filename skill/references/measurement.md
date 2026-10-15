@@ -10,14 +10,19 @@ is the how-to behind them.
 
 ## 0. Fixed-shape benchmark contract
 
-- The workload comes from `scripts/workload.py`: GBS `$AUTOTUNE_GBS` (default 128), row length `$AUTOTUNE_SEQ_LEN` (default 8,192), dataset `$AUTOTUNE_DATASET`, N = `$AUTOTUNE_NUM_STEPS` steps unprofiled (default 14) and `$AUTOTUNE_NUM_STEPS_PROFILED` profiled (17).
+- The workload comes from `scripts/workload.py`: GBS `$AUTOTUNE_GBS` (default 128), row length `$AUTOTUNE_SEQ_LEN` (default 8,192), dataset `$AUTOTUNE_DATASET`, N = `$AUTOTUNE_NUM_STEPS` steps unprofiled (default 20, at least 20) and N+2+K profiled, with K = `$AUTOTUNE_PROFILE_CAPTURE` recorded steps (default 1, so 23).
 - Use frozen, model-tokenizer-specific rows of exactly the row length with no padding.
 - Hold dataset bytes/order, seeds, objective, GBS, hardware type, image, and code fixed (and the GPU count, fixed at the baseline's count: SKILL.md Invariants).
 - Run one N-step job per recipe. Do not restore, publish, or persist a Triton cache.
-- Discard startup steps 0-3 and rank only the complete window 4..N-1 (4-13 at the default N=14), the same window for a profiled and an unprofiled run.
-- When a run is profiled it runs $AUTOTUNE_NUM_STEPS_PROFILED steps (default 17): the same ranked window, then the
-  warmup step N (14) and the recorded steps N+1..M-1 (15-16); never profile the ranked window. Profiling is per
-  launch, not part of the contract.
+- Discard warm-up steps 0-4 and rank only the complete window 5..N-1 (5-19 at the default N=20), the same window for a profiled and an unprofiled run.
+- When a run is profiled it runs N+2+K steps (default 23): the same ranked window, then the profiler's setup step N
+  (20), its warm-up step N+1 (21) and the K recorded steps N+2..N+1+K (22; up to 22-24 with
+  `make_run_yaml.py --profile-capture 3`); never profile the ranked window. Profiling is per launch, not part of the
+  contract.
+- Steps 0-19 of an unprofiled run are also its side of the final correctness check (`pair_from_runs.py`), so a
+  shipped number and its correctness evidence come from the same run unless the ranked run was profiled. A profiled
+  run changes `--num-rollout`, which the LR schedule can depend on, so it is never a side of the check; such a recipe
+  gets one unprofiled confirm run for it (SKILL.md, Verdict).
 - Do not apply this protocol to variable-shape data. Use a separately validated window there.
 
 ## 1. Where the logs live
@@ -83,15 +88,16 @@ grep -oE "'perf/actor_train_tok_per_s': [0-9.]+" train.log | awk -F: '{print $NF
 aggregate_tok_per_s_per_gpu = total_tokens_in_window / total_step_time_in_window / num_gpus
 ```
 
-- **Window: steps 4-13 of the single run** (10 samples at the default step count). Steps 0-3 absorb startup and fixed-shape
-  compilation. The window is predeclared and identical for every recipe.
+- **Window: steps 5-19 of the single run** (15 samples at the default step count). Steps 0-4 absorb startup, fixed-shape
+  compilation and allocator warm-up; a few layouts still run 10-15% slow at step 4. The window is predeclared and
+  identical for every recipe.
 - **Do NOT use `mean(per_step_tok_per_s)`** — averaging rates over-weights short steps.
   Aggregate-tokens-over-aggregate-time is the correct reduction.
 - **Report the step_time distribution alongside the aggregate** (mean, standard deviation, CV,
   p50, min, max). A tight p50 with a catastrophic max is diagnostic — see §5. Within-run CV is
   a stability diagnostic, not independent replication.
-- `read_metrics.sh <log> 4 13 <num_gpus>` implements this and emits JSON. The window defaults to
-  `$AUTOTUNE_WINDOW_START` (4) through N-1 (13 at the default N=14). Prefer it over one-off greps. It exits
+- `read_metrics.sh <log> 5 19 <num_gpus>` implements this and emits JSON. The window defaults to
+  `$AUTOTUNE_WINDOW_START` (5) through N-1 (19 at the default N=20). Prefer it over one-off greps. It exits
   non-zero / `valid:false` on a short window or bad data.
 
 **MFU expectation:** large-MoE SFT at moderate GPU counts is comm-bound — expect MFU far below
@@ -109,13 +115,13 @@ exception: flags Megatron requires paired (e.g. `--overlap-grad-reduce` + `--ove
 — call the coupling out in the hypothesis. Never stack "winner + new flag" on top of other
 un-validated recent changes.
 
-**Don't dynamically pick windows to make a config win.** The window (4-13) is pre-declared and
+**Don't dynamically pick windows to make a config win.** The window (5-19) is pre-declared and
 fixed across the sweep; consistency matters more than optimizing each comparison.
 
 **Sanity checks before trusting any number:**
-- Run reached its last step (13 unprofiled, 16 profiled, at the defaults)? A shorter `SUCCEEDED` RayJob is incomplete or
+- Run reached its last step (19 unprofiled, 22 profiled, at the defaults; `poll_run.sh` prints the `target_step` it used)? A shorter `SUCCEEDED` RayJob is incomplete or
   swallowed an actor error.
-- Every perf line present in 4-13? A short count = dropped emission → aggregate invalid
+- Every perf line present in 5-19? A short count = dropped emission → aggregate invalid
   (`read_metrics.sh` returns `valid:false`).
 - No persistent compilation cache was restored, mounted, or published?
 - No new shape or compilation tail appeared in the measured window? A late compile invalidates the run.
@@ -125,7 +131,8 @@ fixed across the sweep; consistency matters more than optimizing each comparison
 **Correctness check.** Throughput says nothing about whether a recipe still trains the same model. Every shipped
 recipe passes the two-layer correctness check (configuration, then 20-step convergence) run as the final cascade
 (SKILL.md "When to stop"). `scripts/correctness/PROTOCOL.md` is the authoritative protocol: pair setup, the
-`make_parity_arm.py` and `parity_verdict.py` commands, the thresholds, and how to validate the check on a new setup.
+`pair_from_runs.py` and `parity_verdict.py` commands (and `make_parity_arm.py` for diagnostic arms), the
+thresholds, and how to validate the check on a new setup.
 
 ## 5. Compile-tail vs rollout-stall (canonical diagnosis)
 
@@ -139,7 +146,7 @@ recipe passes the two-layer correctness check (configuration, then 20-step conve
 | spiked | normal (≈ p50) | **Real rollout stall** — trainer waiting on inference. Needs warmup requests / persistent engine. |
 | stays near zero | spiked | **JIT recompile tail** — a kernel rebuild triggered by a new microbatch shape (the diagnostic — `train_wait≈0` while `actor_train` spikes — is empirical/verified; the *mechanism* is uncited, likely Megatron/TE JIT — confirm against the framework/version before asserting it). Dynamic batching exposes new shapes early; higher PP depth × vpp enlarges the shape space. |
 
-**Fixed-shape policy:** a fresh job may compile during startup, which is why steps 0-3 are excluded.
+**Fixed-shape policy:** a fresh job may compile during startup, which is why steps 0-4 are excluded.
 Exact fixed-length rows should not introduce a new shape later. Any compile-tail signature in the measured window
 means the run violated that assumption; mark it invalid and diagnose the data path or runtime
 rather than changing the window. Do not restore a persistent cache to hide the violation.
@@ -151,9 +158,10 @@ Do not add compile-cache wiring of your own.
 diagnosis you do not have — the baseline is the natural first candidate, and a run whose bottleneck you cannot
 name from its metrics is the next. A plain value sweep along a lever you have already diagnosed often needs no
 trace. A profiled run is charged its full cost like any other, and `make_run_yaml.py --benchmark` produces an
-unprofiled run unless you pass `--with-profiler`. Profile after the ranked window because
-captured steps can be materially slower and profiler overhead can vary by recipe. Use the same
-three-step capture policy for every ranked candidate.
+unprofiled run unless you pass `--with-profiler`. Profile after the ranked window because the
+profiler's setup, warm-up and captured steps can be materially slower and profiler overhead can vary by recipe.
+Record one step by default; `--profile-capture 2|3` records up to three when the step-time CV is high or something
+periodic is suspected.
 
 On miles (v0.1.0) the default `miles_compat` hook applies the `SLIME_PROFILE_*` switches as on slime. On another
 miles version it leaves miles' profiler factory in place and prints `MILES_COMPAT_HOOK_SKIP`; that factory records
@@ -162,16 +170,19 @@ shapes, stacks, memory and FLOPs, so expect larger traces than on slime.
 **Standard flags** (`make_run_yaml.py --benchmark --with-profiler` adds these):
 ```
 --use-pytorch-profiler --profile-target train_overall \
---profile-step-start 15 --profile-step-end 17 \
+--profile-step-start 22 --profile-step-end 23 \
 --tensorboard-dir $AUTOTUNE_EXPERIMENTS_DIR/<run_id>/profiles
 ```
 - **`train_overall`** is stepped once per rollout by slime's TrainProfiler. Some slime builds never
   call the `train_actor` path, so that target writes no trace; check a new image's first run for a
   trace before trusting either target (levers.md "Profiler operability").
-- **Step 14 warms up the profiler; steps 15-16 are active capture (at the default step counts).** Slime computes
-  `active = profile_step_end - profile_step_start`, so the end is exclusive: `15-17` records
-  exactly two steps. Keeping capture after the measured window prevents profiler work and trace flushing from
-  biasing ranked throughput.
+- **Step 20 sets up the profiler, step 21 warms it up, step 22 is captured (at the default step counts).** Slime's
+  schedule is `wait = start - 1`, `warmup = 1`, `active = end - start`, and it steps the profiler at the end of each
+  step inside the step's timer, so the setup lands in step START-2 and the warm-up in START-1; the end is exclusive,
+  so `22-23` records exactly one step and `22-25` three. `make_run_yaml.py` refuses a range whose setup step falls
+  inside steps 0..N-1 or whose end exceeds `--num-rollout`, so profiler work and trace flushing never bias the
+  ranked window and a profile is never silently skipped; when the YAML's `--num-rollout` is not a literal integer
+  (a shell variable, `--num-epoch`) it refuses the render unless you pass `--unchecked-num-rollout`.
 - **One trace per pipeline stage** by default: `make_run_yaml.py --with-profiler` enables the `profile_rank`
   hook (`scripts/profile_rank_hook/`) in the hook chain (`scripts/hook_chain.py`) on every pod, which
   lets only the TP/CP/DP-rank-0 rank of each stage create the profiler. `--profile-ranks all` skips the hook,
@@ -235,7 +246,7 @@ that specific collective.
 **When to extend profiling** (the `SLIME_PROFILE_*` switches go on with `make_run_yaml.py --env`): imbalance inside
 a stage (TP/DP peers) → `SLIME_PROFILE_ALL_RANKS=1`; memory → `SLIME_PROFILE_MEMORY=1 --record-memory-history`;
 kernel tuning → `SLIME_PROFILE_WITH_STACK=1`;
-do not extend or shift the 4-13 ranking window after seeing results. A longer diagnostic is
+do not extend or shift the 5-19 ranking window after seeing results. A longer diagnostic is
 unranked and recorded separately. **Skip profiling** only when the hypothesis is fully
 tok/s-measurable and you already have a matching base-config profile.
 

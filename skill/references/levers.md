@@ -946,7 +946,7 @@ RayJobs. Independent failure modes, each fatal to the trace (FAILED or zero trac
    `iterate_train_log_probs` paths (targets `train_actor` / `train_log_probs`) are never called. Then
    `--profile-target train_actor` yields `use_pytorch_profiler=True` but **zero traces** (silently no
    trace). The skill defaults to `--use-pytorch-profiler --profile-target train_overall
-   --profile-step-start 15 --profile-step-end 17` (at the default step counts, `scripts/workload.py`); that
+   --profile-step-start 22 --profile-step-end 23` (at the default step counts, `scripts/workload.py`); that
    target's schedule counts training steps, so start/end remain step indices. Check `actor.py` once per image.
 4. **A broken bash line-continuation drops trailing flags.** An empty conditional line after a `\`
    silently truncates the python command. Verify `use_pytorch_profiler` is actually True in the

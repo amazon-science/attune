@@ -27,7 +27,7 @@ On four models held out from its development, each starting from the strongest p
 - **Search.** The agent proposes each candidate from a diagnosis of the current leader (exposed communication,
   pipeline bubbles, memory, kernel launches) and the lessons in the lever catalog, `skill/references/levers.md`, which
   it extends as a campaign learns.
-- **Measurement.** Every candidate runs the same fixed-shape workload for 14 steps, scored on steps 4 to 13, and
+- **Measurement.** Every candidate runs the same fixed-shape workload for 20 steps, scored on steps 5 to 19, and
   replaces the leader only if it beats it by more than the noise band.
 - **Correctness.** A configuration check classes every changed argument as numeric, placement or an allowlisted
   same-math swap; a 20-step convergence check compares the candidate's loss with the baseline's using Megatron-Bridge's

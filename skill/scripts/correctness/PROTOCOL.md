@@ -7,21 +7,33 @@ the final cascade (`SKILL.md`, "When to stop").
 
 ## Pair setup
 
-- One baseline arm and one candidate arm, **20 training steps each** (steps 0-19).
+- One baseline side and one candidate side, **20 training steps each** (steps 0-19).
 - Same frozen benchmark data (bytes and order), same seed, same global batch size (the benchmark GBS), and the same
-  training image for both arms.
-- Make each arm from its ranked run's YAML:
+  training image for both sides.
+- **The default reuses the benchmark runs.** Under the workload contract of `make_run_yaml.py --benchmark` the
+  baseline's unprofiled benchmark run and the candidate's own unprofiled benchmark run already hold steps 0-19 on
+  the same data, seed and GBS, so the check needs no new launch:
+  `pair_from_runs.py --base-log <baseline train.log> --base-yaml <its yaml> --win-log <candidate train.log>
+  --win-yaml <its yaml> --pair <dir>` checks both runs, then copies the two logs into a pair directory and writes
+  each run's GPU count (`gpus.json`) and image (`images.json`). It refuses, before writing anything, a missing log or
+  YAML, a profiled run, a run missing any loss of steps 0-19 or `num_rollout` in its argument dump, two runs with
+  different `--num-rollout`, and two runs on different images unless `--allow-image-change` says the candidate's
+  recipe changes the image. A profiled run is longer, and slime's LR and weight-decay schedules can depend on the
+  run length, so it is never a side: a candidate whose ranked run was profiled gets one unprofiled confirm run
+  (`SKILL.md`, Verdict) and that run is paired.
+- **Probe arms, to diagnose a failing pair.** Make each arm from its ranked run's YAML:
   `make_parity_arm.py --base <run.yaml> --run-id <arm_run_id> --out <arm.yaml>`. It renames the run (the arm id
   follows the run-id and prefix rules of `make_run_yaml.py`, and the arm gets the owner label), sets `--num-rollout 20`, and enables the count probe (`parity_probe/sitecustomize.py`) on every pod
   through the hook chain (`../hook_chain.py`): ConfigMap keys, a read-only volume at `/opt/attune_hooks`, and a
   `PYTHONPATH` prefix (container env, `runtimeEnvYAML`, and any `export PYTHONPATH=` in the training script).
   Everything else stays as in the source YAML, so the two arms differ only by the recipe. `PARITY_PROBE=0`
-  disables the probe.
+  disables the probe; benchmark runs never load it (`make_run_yaml.py --benchmark` removes it from
+  `$ATTUNE_HOOKS`).
 - The chain's loader runs the next `sitecustomize.py` after its hooks (normally the image's own), so the probe
   combines with it.
 - Both logs must contain Megatron's resolved-argument dump and the per-step `train/loss` and
   `train/grad_norm` lines (standard slime/Megatron output).
-- One baseline arm serves every candidate tested in the cascade.
+- One baseline run serves every candidate tested in the cascade.
 
 The probe prints one line per training step:
 
@@ -77,7 +89,7 @@ step-0 loss and grad-norm relative differences, and the 20-step mean loss gap.
 
 - A recipe ships only if it passes layers 1 and 2.
 - On failure, test the next-best ranked recipe of the same campaign that is eligible to ship
-  (`SKILL.md` Invariants) against the same baseline arm. If none passes, ship the baseline.
+  (`SKILL.md` Invariants) against the same baseline run. If none passes, ship the baseline.
 - Infrastructure failures (hangs, NCCL init, node loss, image pull) are relaunched and give no
   verdict; any other failure is reported.
 - Fix thresholds, windows and scope before looking at results, and never change them afterwards.
@@ -95,19 +107,22 @@ Before relying on the gate for a new setup:
 ## Running the verdict script
 
 ```
-<pair>/base.log     # baseline arm train.log
-<pair>/win.log      # candidate arm train.log
-<pair>/gpus.json    # optional: {"base": <num_gpus>, "win": <num_gpus>}
-<pair>/images.json  # optional: the image each arm ran; write it with make_parity_arm.py --pair <pair> --arm base|win,
-                    # which reads the arm YAML's containers (never copy it from the environment)
+<pair>/base.log     # baseline side train.log
+<pair>/win.log      # candidate side train.log
+<pair>/gpus.json    # {"base": <num_gpus>, "win": <num_gpus>}
+<pair>/images.json  # the image each side ran, read from its YAML's containers (never copied from the environment)
 ```
 
-In a campaign, copy each arm's `train.log` into a pair directory under the project folder through the log-access pod:
+In a campaign, copy each run's `train.log` off the log-access pod, then let `pair_from_runs.py` build the pair:
 
 ```bash
-kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" exec "$AUTOTUNE_LOG_POD" -- cat <base arm log> > <pair>/base.log
-kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" exec "$AUTOTUNE_LOG_POD" -- cat <candidate arm log> > <pair>/win.log
+kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" exec "$AUTOTUNE_LOG_POD" -- cat <baseline run log> > <dir>/base_run.log
+kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" exec "$AUTOTUNE_LOG_POD" -- cat <candidate run log> > <dir>/win_run.log
+python3 <this-skill-dir>/scripts/correctness/pair_from_runs.py --base-log <dir>/base_run.log --base-yaml <baseline yaml> \
+    --win-log <dir>/win_run.log --win-yaml <candidate yaml> --pair <pair>
 ```
+
+For diagnostic probe arms, `make_parity_arm.py --pair <pair> --arm base|win` records each arm's image instead.
 
 Then score it (`<this-skill-dir>` is the skill's directory, `skill/` in this repository):
 
@@ -118,6 +133,7 @@ python3 <this-skill-dir>/scripts/correctness/parity_verdict.py <root> [--json ve
 
 For each pair it prints PASS or FAIL with the layer-1 and layer-2 results, what tripped layer 1 (errors, numeric
 changes, allowlist, derived and frozen violations), the failed layer-2 metrics, whether the probe counts are
-identical, the step-0 deltas and the 20-step gap. With `gpus.json`, throughput printed alongside is probe tokens
-over logged step time (steps 3-19), for orientation only. It exits 0 when every pair passes, 1 when any pair fails
+identical (when the probe ran), the step-0 deltas and the 20-step gap. With `gpus.json`, throughput printed alongside
+is tokens over logged step time per GPU on steps 5-19 (probe tokens when the probe ran, else the logged tokens), for
+orientation only. It exits 0 when every pair passes, 1 when any pair fails
 or cannot be scored, and 2 when it finds no pair.
