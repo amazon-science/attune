@@ -9,7 +9,8 @@ $AUTOTUNE_PROJECT_ROOT. A campaign has converged
   - in GPU-hour mode ($AUTOTUNE_GPUH_BUDGET set), when the GPU-hours spent reach the budget, or when the
     ledger holds the baseline row and the agent's STOP row with its evidence.
 Spend is the largest of the ledger's per-run `gpuh` sum, its `gpuh_cumulative` and the total of the GPU-hour
-log that scripts/run_gpuh.py writes ($AUTOTUNE_GPUH_LOG, else <project_root>/gpuh.jsonl).
+log that scripts/run_gpuh.py writes ($AUTOTUNE_GPUH_LOG, else <project_root>/gpuh.jsonl; a run's last line counts).
+Runs on Python 3.7+ (the Stop hook imports it).
 """
 
 from __future__ import annotations
@@ -138,10 +139,18 @@ def _hours(value) -> float | None:
 
 
 def gpuh_spent(rows: list[dict], log_rows: list[dict]) -> float:
-    per_run = {r["run_id"]: h for r in rows if r.get("run_id") and (h := _hours(r.get("gpuh"))) is not None}
-    cumulative = [h for r in rows if (h := _hours(r.get("gpuh_cumulative"))) is not None]
-    logged = sum(h for r in log_rows if (h := _hours(r.get("gpuh"))) is not None)
-    return max([sum(per_run.values()), logged] + cumulative)
+    """The largest of the ledger's per-run sum, its cumulative values and the log's total. A run counts its last
+    measured value; a later row or line without one leaves it."""
+    def latest(items, key):
+        out = {}
+        for n, r in enumerate(items):
+            h = _hours(r.get("gpuh"))
+            if h is not None:
+                out[r.get(key) or "#%d" % n] = h
+        return out
+    per_run = latest([r for r in rows if r.get("run_id")], "run_id")
+    cumulative = [h for h in (_hours(r.get("gpuh_cumulative")) for r in rows) if h is not None]
+    return max([sum(per_run.values()), sum(latest(log_rows, "run").values())] + cumulative)
 
 
 def evaluate(rows: list[dict], limits: Limits, log_rows: list[dict] = ()) -> Eval:

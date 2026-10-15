@@ -136,4 +136,7 @@ changes, allowlist, derived and frozen violations), the failed layer-2 metrics, 
 identical (when the probe ran), the step-0 deltas and the 20-step gap. With `gpus.json`, throughput printed alongside
 is tokens over logged step time per GPU on steps 5-19 (probe tokens when the probe ran, else the logged tokens), for
 orientation only. It exits 0 when every pair passes, 1 when any pair fails
-or cannot be scored, and 2 when it finds no pair.
+or cannot be scored, and 2 when it finds no pair. Under the launcher it first runs the campaign's integrity check
+(`harness/integrity.py`), which also hashes the dataset again through the log pod; on a violation (a changed or
+missing dataset included) it scores nothing, no recipe ships, and it exits 3. When the log pod cannot be reached it
+scores nothing and exits 4: retry.

@@ -1,5 +1,5 @@
 {
-  "_comment": "Rendered by launch_campaign.sh into <campaign>/.claude/settings.json: ${VAR} values come from the environment (config.env) and empty values are dropped. WebFetch and WebSearch are denied unless AUTOTUNE_ALLOW_WEB=1, in which case the launcher removes them from this list and from --disallowedTools, and the PreToolUse guard allows curl and wget GET requests. The PreToolUse hook screens shell commands and file edits; the Stop hook keeps the session going until the campaign converges.",
+  "_comment": "Rendered by launch_campaign.sh into <campaign>/.claude/settings.json: ${VAR} values come from the campaign's settings (config.env) and empty values are dropped. Web access is on unless AUTOTUNE_ALLOW_WEB=0; then the launcher adds WebSearch and WebFetch to permissions.deny and --disallowedTools, and the PreToolUse guard refuses curl and wget. The hooks run from the campaign's harness copy: the PreToolUse guard keeps kubectl in the campaign's scope and protects ATTUNE's records, and the Stop hook checks the campaign's integrity (tearing down its tracked runs and ending the session on a violation; its timeout leaves room for the teardown) and keeps the session going until the campaign converges. A hook that fails to start exits 2, which blocks.",
   "env": {
     "AUTOTUNE_AUTONOMOUS": "1",
     "BASH_DEFAULT_TIMEOUT_MS": "600000",
@@ -7,15 +7,18 @@
     "AUTOTUNE_USER": "${AUTOTUNE_USER}",
     "AUTOTUNE_OWNER_LABEL": "${AUTOTUNE_OWNER_LABEL}",
     "ATTUNE_RUN_PREFIX": "${ATTUNE_RUN_PREFIX}",
+    "ATTUNE_CAMPAIGN_ID": "${ATTUNE_CAMPAIGN_ID}",
     "AUTOTUNE_KUBECTL_CONTEXT": "${AUTOTUNE_KUBECTL_CONTEXT}",
     "KUBECTL_NS": "${KUBECTL_NS}",
     "AUTOTUNE_LOG_POD": "${AUTOTUNE_LOG_POD}",
     "AUTOTUNE_INSTANCE_TYPES": "${AUTOTUNE_INSTANCE_TYPES}",
     "AUTOTUNE_SHARED_MOUNT": "${AUTOTUNE_SHARED_MOUNT}",
-    "AUTOTUNE_PROTECTED_PATHS": "${AUTOTUNE_PROTECTED_PATHS}",
     "AUTOTUNE_EXPERIMENTS_DIR": "${AUTOTUNE_EXPERIMENTS_DIR}",
     "AUTOTUNE_DATA_ROOT": "${AUTOTUNE_DATA_ROOT}",
     "AUTOTUNE_PROJECT_ROOT": "${CAMPAIGN_DIR}",
+    "CAMPAIGN_DIR": "${CAMPAIGN_DIR}",
+    "ATTUNE_CONTROL_DIR": "${ATTUNE_CONTROL_DIR}",
+    "AUTOTUNE_LEDGER": "${AUTOTUNE_LEDGER}",
     "AUTOTUNE_NUM_GPUS": "${AUTOTUNE_NUM_GPUS}",
     "AUTOTUNE_FIXED_GPUS": "${AUTOTUNE_FIXED_GPUS}",
     "AUTOTUNE_ALLOW_GPU_COUNT_CHANGE": "${AUTOTUNE_ALLOW_GPU_COUNT_CHANGE}",
@@ -37,8 +40,6 @@
   "permissions": {
     "defaultMode": "bypassPermissions",
     "deny": [
-      "WebSearch",
-      "WebFetch",
       "Bash(aws configure get*)",
       "Bash(aws configure export-credentials*)",
       "Bash(aws sts get-session-token*)",
@@ -150,7 +151,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${ATTUNE_HOME}/harness/hooks/pretooluse_guard.py"
+            "command": "python3 ${ATTUNE_CONTROL_DIR}/harness/hooks/pretooluse_guard.py || exit 2"
           }
         ]
       }
@@ -161,7 +162,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${ATTUNE_HOME}/harness/hooks/stop_gate.py"
+            "command": "python3 ${ATTUNE_CONTROL_DIR}/harness/hooks/stop_gate.py || exit 2",
+            "timeout": 900
           }
         ]
       }

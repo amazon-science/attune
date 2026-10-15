@@ -27,9 +27,10 @@ guess. Derive:
   so priors are discoverable by GPU family across projects. Append the instance only when GPU type
   doesn't disambiguate (p5e and p5en are both H200 → `…-h200-p5e` / `…-h200-p5en`).
 - `run_id` = `<prefix><project_tag>-<suffix>`: lowercase letters, digits and `-`, ≤47 chars, where `<prefix>` is
-  `${ATTUNE_RUN_PREFIX:-$AUTOTUNE_USER-}` (`$AUTOTUNE_USER`, your owner-label value, is required). Every RayJob and
-  ConfigMap name starts with that prefix: `make_run_yaml.py` refuses another run id and labels the run
-  `<AUTOTUNE_OWNER_LABEL>=<AUTOTUNE_USER>`, and `teardown_run.sh` refuses a run without both.
+  `${ATTUNE_RUN_PREFIX:-$AUTOTUNE_USER-}` (`$AUTOTUNE_USER`, your owner-label value, is required; the launcher
+  requires a campaign-specific `ATTUNE_RUN_PREFIX`). Every RayJob and ConfigMap name starts with that prefix:
+  `make_run_yaml.py` refuses another run id and labels the run `<AUTOTUNE_OWNER_LABEL>=<AUTOTUNE_USER>`,
+  `teardown_run.sh` refuses a run without both, and under the launcher `kubectl` changes only objects with the prefix.
 - `project_folder` = `${AUTOTUNE_PROJECT_ROOT:-$PWD/attune-projects}/<project_tag>/` — all state lives here,
   including the ledger `AUTOTUNE_LEDGER.jsonl` (`$AUTOTUNE_LEDGER`, when set, names the ledger file instead; the
   harness Stop hook reads the same file).
@@ -41,10 +42,11 @@ Skip any step whose durable output exists; a valid `baseline` ledger row means b
 
 ```
 B0. Find authoritative recipes for the model (exact model, then nearest architecture/size; vendor/framework
-    repos over blogs). With web access (`AUTOTUNE_ALLOW_WEB=1`; off by default) search the internet; without
-    it, use the recipes and references available locally or provided by the operator (`references/levers.md`
-    §a lists the upstream sources) and make no network requests. Record dated sources + GPU count/type,
-    topology, batch, seq-len, precision, recompute, offload in `RESULTS.md`, noting what transfers.
+    repos over blogs). With web access (on by default; evaluation campaigns turn it off with
+    `AUTOTUNE_ALLOW_WEB=0`) search the internet; without it, use the recipes and references available locally or
+    provided by the operator (`references/levers.md` §a lists the upstream sources) and make no network requests.
+    Record dated sources + GPU count/type, topology, batch, seq-len, precision, recompute, offload in `RESULTS.md`,
+    noting what transfers.
 B1. Swap in the ranking workload. The workload comes from the environment (`scripts/workload.py`):
     GBS `$AUTOTUNE_GBS` (default 128), rows of exactly `$AUTOTUNE_SEQ_LEN` tokens (default 8,192),
     dataset `$AUTOTUNE_DATASET`, and `$AUTOTUNE_NUM_STEPS` steps per unprofiled run (default 20; a profiled
@@ -129,8 +131,8 @@ L3. check_gpu_capacity.py (`--baseline <yaml>` counts the run's tolerations) →
     from the run's own `--num-rollout` when the log or RayJob shows it, and prints the `target_step` it used.)
 L4. On each finished run, do BOTH:
     (a) **Finalize** — in the exact "State & idempotency contract" order so an interrupted finalize
-        resumes safely: read_metrics.sh → verdict (table below) → append ledger + rewrite RESULTS.md
-        → teardown → drop the `tracked_jobs.jsonl` line.
+        resumes safely: read_metrics.sh → verdict (table below) → append the ledger row (`ledger_append.py`)
+        + rewrite RESULTS.md → teardown → drop the `tracked_jobs.jsonl` line.
     (b) **Diagnose the run, and decide whether the next one needs a trace.** Record `profiled` and
         `profile_reason` on every terminal ledger row (ledger.md). Profiling is per launch and the choice is
         yours: profile when the next decision needs a diagnosis you do not have — the baseline is the natural
@@ -147,8 +149,9 @@ L4. On each finished run, do BOTH:
         memory and timing lines) and say so in `profile_reason`.
     (c) **Write back conclusive insights.** If the run established a *generalizable* fact about a lever
         — its mechanism, when it helps or hurts, a failure mode, an interaction, or a saturation/quantization
-        boundary (e.g. fixed-length mt step-function) — APPEND it to `references/levers.md` (the
-        cross-project catalog) as a rule, in the same commit as the ledger row. `levers.md` holds guidance
+        boundary (e.g. fixed-length mt step-function) — APPEND it to the end of `references/levers.md` (the
+        cross-project catalog) as a rule, in the same commit as the ledger row. The file is append-only: under the
+        launcher an edit anywhere but its end is refused, and a rewrite fails the campaign. `levers.md` holds guidance
         only: mechanism, condition, and direction, with a magnitude at most as a word ("large", "a
         tie") or a rough range; no exact throughputs, deltas, step times, memory figures, GPU counts,
         dates, model or cluster names, or run_ids. The numbers and evidence go in RESULTS.md and the
@@ -268,11 +271,11 @@ Per-project state files:
 
 | file | role | write rule |
 |---|---|---|
-| `AUTOTUNE_LEDGER.jsonl` | source of truth: one terminal row per finished run | append-only; never rewrite a prior row (schema: `references/ledger.md`) |
+| `AUTOTUNE_LEDGER.jsonl` | source of truth: one terminal row per finished run | append-only, through `scripts/ledger_append.py`; never rewrite a prior row (schema: `references/ledger.md`) |
 | `tracked_jobs.jsonl` | the in-flight runs being polled | one line per live run; shrinks as runs finalize (schema: `references/ledger.md`) |
 | `RESULTS.md` | human-readable leaderboard | **REWRITE the headline leaderboard table after EVERY completed run** — regenerate it from the ledger (current leader + all ranked rows sorted by tok/s/GPU), don't just append notes below a stale table. A resuming session/human reads the top table to know the leader; a drifted headline (e.g. still showing the baseline as leader after a win) is a real failure. Sync it in the same commit as the ledger row (L4a). |
 | `QUEUE.md` | runs deferred past the concurrency cap | append/trim as slots free |
-| `gpuh.jsonl` | GPU-hour log, GPU-hour budget mode only | one line per launch, written at submit and completed at finalize by `run_gpuh.py` (path `$AUTOTUNE_GPUH_LOG`, else `./gpuh.jsonl`) |
+| `gpuh.jsonl` | GPU-hour log, GPU-hour budget mode only | append-only: a line at submit and a measured line at finalize, written by `run_gpuh.py` (path `$AUTOTUNE_GPUH_LOG`, else `./gpuh.jsonl`) |
 
 **On each poll**, read `poll_run.sh`'s `status` and act by case. A finished run goes through the
 commit sequence **in this exact order** — each step runs only if the previous one succeeded, so an
@@ -282,9 +285,12 @@ interruption is always safe to resume:
   1. `read_metrics.sh` — validate. Exit 0 gives the ranked number. Exit 3 or 4 (no perf lines, an invalid or
      incomplete window) makes the run an `error`, never a rank. On any other non-zero exit (5: the log could not
      be read) **stop here**, keep the tracking line and retry on the next poll (never ledger unread metrics).
-  2. append the ledger row — **the commit point.** Write the fields of `references/ledger.md` §1: `kind`,
-     `status`, `verdict` and the `metrics` JSON unchanged. A `run_id` that already has a terminal row is never
-     re-ledgered (idempotent), so a re-poll after a crash won't double-count.
+  2. append the ledger row with `scripts/ledger_append.py <project_folder>/AUTOTUNE_LEDGER.jsonl '<row JSON>'` —
+     **the commit point.** Write the fields of `references/ledger.md` §1: `kind`, `status`, `verdict` and the
+     `metrics` JSON unchanged. A `run_id` that already has a terminal row is never re-ledgered (idempotent; the script
+     skips it), so a re-poll after a crash won't double-count. Under the launcher the script first runs the campaign's
+     integrity check; exit 3 means a protected file changed and the campaign has failed: the script has torn down the
+     runs in `tracked_jobs.jsonl` (its output says how that went), so stop.
   3. `teardown_run.sh` — free the cluster resources.
   4. remove the `tracked_jobs.jsonl` line — **only after** teardown exits 0 (removing it earlier
      orphans cluster resources).
@@ -331,8 +337,8 @@ fixed cap, not a target to spend:
   hypothesis with an expected gain (no hypothesis, no launch), so never launch a run only to spend budget. A
   quiet poll or a finished batch is not convergence.
 - *Declaring convergence.* Nothing may be in flight: tear down any live run first (`teardown_run.sh`) and
-  let it finalize; it is charged as usual. Then write the **`STOP` record**: a ledger row with `kind:
-  "stop"` and non-empty `reason`, `leader`, `neighbours` and `diagnosis` (ledger.md; the Stop hook accepts no
+  let it finalize; it is charged as usual. Then write the **`STOP` record**: a ledger row (`ledger_append.py`) with
+  `kind: "stop"` and non-empty `reason`, `leader`, `neighbours` and `diagnosis` (ledger.md; the Stop hook accepts no
   other), and the same content as a `## STOP` section at the top of `RESULTS.md`: the reason, the leader, the
   structural neighbours of the leader you tested (their run_ids and the axis each moved) and what the last
   profile or log diagnosis showed (the remaining bottleneck, and why no untried lever is expected to clear the
@@ -358,7 +364,11 @@ unprofiled benchmark run is the reference side and the candidate's own unprofile
 (same data, seed, benchmark GBS, image and `--num-rollout`, scored on steps 0-19). Copy both `train.log`s off the log
 pod, make the pair with `scripts/correctness/pair_from_runs.py --base-log <log> --base-yaml <yaml> --win-log <log>
 --win-yaml <yaml> --pair <dir>` (`--allow-image-change` only when the recipe itself changes the image), then run
-`scripts/correctness/parity_verdict.py` on it. A candidate whose ranked run was profiled first gets its confirm run
+`scripts/correctness/parity_verdict.py` on it. Its exit status decides the step: 0 PASS; 1 FAIL (drop the recipe, as
+below); 4 the log pod could not be reached to hash the dataset, so nothing was scored: retry the same pair once the
+pod answers, and never drop the recipe on it; 3 the campaign failed its integrity check (a changed or missing
+dataset included) and no recipe ships.
+A candidate whose ranked run was profiled first gets its confirm run
 (Verdict §). Probe arms (`scripts/correctness/make_parity_arm.py`) are for diagnosing a failing pair, not for the
 verdict.
 Layer 1: resolved-argument diff with no numeric change (by the frozen rule lists,
@@ -377,7 +387,9 @@ check stays open and does not pass. The thresholds and the 20-step window are fi
 after seeing a result. Infrastructure failures are relaunched and give no verdict.
 
 **Whenever you stop** — mandatory closeout so future projects inherit experience.
-Write `<this-skill-dir>/past_tuning_projects/<project_tag>_summary.md`:
+Write `<this-skill-dir>/past_tuning_projects/<project_tag>_<campaign_id>_summary.md`, where `<campaign_id>` is
+`$ATTUNE_CAMPAIGN_ID` (set by the launcher; outside it, your run prefix and the date), so it never takes the name of
+an earlier campaign's summary:
 model + hardware, baseline → winner tok/s/GPU and Δ%, the biggest lever (and why), what won / tied /
 lost with reasons, excluded objective-changing wins, gotchas hit, untried ideas, and a **reference to
 the project artifacts path as an ABSOLUTE path**. Summaries are local operator records (they carry
@@ -390,13 +402,15 @@ their generalizable rules into `levers.md` instead (`past_tuning_projects/README
   `AUTOTUNE_KUBECTL_CONTEXT` and `KUBECTL_NS` and fail closed when either is absent (there is no default
   namespace); `poll_run.sh` also needs `$AUTOTUNE_LOG_POD`. Every manual command is
   `kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" ...`; never rely on or mutate the process-global
-  current context.
+  current context. The unattended harness refuses a `kubectl` call without both, a change to an object whose name
+  lacks the run prefix, a cluster-scoped kind, and `exec`/`cp` into any pod but the run's own and the log pod.
 - **Deletes go through `teardown_run.sh` only.** Never run `kubectl delete` yourself. `teardown_run.sh
   <run_id>` deletes a run's RayJob and ConfigMaps and refuses a run that lacks the operator's owner label
   (`<AUTOTUNE_OWNER_LABEL>=<AUTOTUNE_USER>`) or the run-id prefix. Never touch other users' jobs or pods.
 - **`kubectl exec` and `kubectl cp` only against `$AUTOTUNE_LOG_POD`, with read-only commands** (`ls`,
-  `cat`, `tail`, `grep`). Never exec into training pods or write inside a pod. When a step needs a write
-  or an in-pod action (removing a stale directory, a stack dump, a node check), ask the operator.
+  `cat`, `tail`, `grep`). The log pod mounts the shared volume read-only (the launcher checks). Never exec into
+  training pods or write inside a pod. When a step needs a write or an in-pod action (removing a stale directory, a
+  stack dump, a node check), ask the operator.
 - **`make_run_yaml.py` edits only run_id + training CLI flags** (`--set/--unset/--add`, `--benchmark`,
   `--with-profiler`), plus the hook chain, `AUTOTUNE_SEQ_LEN` and the structural env vars of
   `scripts/env_rules.py` (`--env NAME=VALUE`: `CUDA_DEVICE_MAX_CONNECTIONS`, `PYTORCH_CUDA_ALLOC_CONF`, `NCCL_ALGO`,
@@ -442,21 +456,25 @@ their generalizable rules into `levers.md` instead (`past_tuning_projects/README
 
 Script paths are relative to this skill's directory, `<this-skill-dir>` (the base directory Claude Code reports
 when it loads the skill): run them as `python3 <this-skill-dir>/scripts/<name>.py` and
-`bash <this-skill-dir>/scripts/<name>.sh`, with arguments rather than inline `AUTOTUNE_*=` settings (the campaign's
-environment comes from the launcher).
+`bash <this-skill-dir>/scripts/<name>.sh`, with arguments rather than inline `AUTOTUNE_*=` settings. Under the
+launcher the campaign's settings come from its `config.env`, and a script refuses (exit 2) an environment that
+disagrees with them (`scripts/campaign.py`).
 
 **Analysis tools are aids; scoring tools are frozen.** `analyze_profile.py`, `check_gpu_capacity.py` and
 `references/print_topology.md` are there to help you diagnose a run: copy any of them (`analyze_profile.py` with
 its `profile_analyzer/` package) into your campaign directory and change or replace them there if that serves the
-next decision (your copy lives and dies with this campaign). Run your own helpers as `python3 <file>` or
-`bash <file>` with the file inside the campaign directory (not `-c`, `-m` or stdin). What a recipe SCORES, and
+next decision (your copy lives and dies with this campaign). Both run from such a copy. Under the launcher the skill
+directory is read-only and a copy keeps its modes, so give the copy its write bit before you edit it
+(`chmod -R u+w <copy>`). Run your own helpers as `python3 <file>` or `bash <file>`. What a recipe SCORES, and
 whether it ships, never comes from your copy: `read_metrics.sh`, the correctness check
 (`correctness/pair_from_runs.py`, `correctness/parity_verdict.py`, and `correctness/make_parity_arm.py` for
 diagnostic arms), `run_gpuh.py` and `calibration.py` are frozen
-and authoritative, so only their results decide the shipped recipe. Leave the skill
-directory unchanged except for the two records you add to it, the only writes the unattended harness allows
-there: lever rules appended to `references/levers.md` (L4c) and the closeout summary
-`past_tuning_projects/<project_tag>_summary.md`.
+and authoritative, so only their results decide the shipped recipe. Under the launcher the skill directory is the
+campaign's read-only copy, and it takes only the two records you add to it: lever rules appended to
+`references/levers.md` (L4c) and the closeout summary `past_tuning_projects/<project_tag>_<campaign_id>_summary.md`
+(a new file; the summaries already there stay as they are). The launcher
+records the hashes of the copy, the campaign's settings and prompts, and the ledger and GPU-hour log as far as they
+have been written; any other change fails the campaign, and no recipe ships from it.
 
 Listed in the order you use them in a cycle — what each does and when to call it:
 
@@ -482,6 +500,11 @@ Listed in the order you use them in a cycle — what each does and when to call 
 - **`read_metrics.sh <log> <start> <end> <num_gpus>`** — parses `train.log`, aggregates `tok/s/GPU`
   over the step window (default 5–19) with a validity gate (`valid:false` / non-zero exit on a bad or
   incomplete window). Call at **loop step L4** on completion to get the ranked number.
+- **`ledger_append.py <project_folder>/AUTOTUNE_LEDGER.jsonl '<row JSON>'`** (or `-` to read the row from stdin) —
+  appends one ledger row, skips a `run_id` that already has a terminal row, and, under the launcher, refuses (exit 3)
+  once the campaign has failed its integrity check, after tearing down the tracked runs. Pass a long row on stdin
+  with a quoted heredoc (`ledger_append.py <ledger> - <<'EOF'`). Call at **loop step L4** (finalize step 2) and for
+  the STOP row.
 - **`analyze_profile.py --profile-dir <dir> [--top-n N] [--json]`** (an aid you may modify in your campaign
   dir) — per-rank step decomposition, per-stage pipeline and host-side memory-management (allocator cleanup)
   facts for the profiler traces in `<dir>`. Traces land at

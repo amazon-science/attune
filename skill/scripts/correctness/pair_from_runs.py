@@ -114,6 +114,9 @@ def check(a):
 
 
 def main(argv=None):
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base-log", required=True, help="train.log of the baseline's unprofiled benchmark run")
     ap.add_argument("--base-yaml", required=True, help="the baseline run's RayJob YAML (GPU count and image)")

@@ -5,7 +5,7 @@
 
     layer1.py <base train.log> <candidate train.log> [--frozen-args FILE] [--image REF]   # exit 0 pass, 1 fail
 
-The rules dir (frozen_args.RULES_DIR: $AUTOTUNE_RULES_DIR, else rules/ beside this file; rules/README.md gives the
+The rules dir (frozen_args.rules_dir(): $AUTOTUNE_RULES_DIR, else rules/ beside this file; rules/README.md gives the
 formats) holds numerics_list.yaml, which classes every argument. The setup's directory is the one holding the
 frozen-arguments file (--frozen-args, else $AUTOTUNE_FROZEN_ARGS; by convention rules/layer1/<setup>/frozen_args.yaml);
 its allowlist.yaml admits same-math swaps and its ct_status.yaml records their component tests. The image's directory,
@@ -30,6 +30,7 @@ import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(1, os.path.dirname(HERE))  # campaign.py
 import frozen_args  # noqa: E402
 
 CLASSES = ("numeric", "placement", "packing", "allowlisted", "derived", "ignored")
@@ -41,7 +42,7 @@ DERIVED_FROM = {"padded_vocab_size": ("make_vocab_size_divisible_by", "tensor_mo
 
 def load_classes(rules_dir=None):
     """name -> class from <rules dir>/numerics_list.yaml."""
-    with open(os.path.join(rules_dir or frozen_args.RULES_DIR, "numerics_list.yaml")) as f:
+    with open(os.path.join(rules_dir or frozen_args.rules_dir(), "numerics_list.yaml")) as f:
         nl = yaml.safe_load(f)
     return {n: k for k in CLASSES for n in nl.get(k) or []}
 
@@ -57,7 +58,7 @@ def image_dir(image, rules_dir=None):
     """rules/images/<prefix>/ whose name (12-64 hex, a real directory) begins the image's sha256 digest; None for an
     image not pinned by digest or without a directory. More than one match raises ValueError."""
     m = re.search(r"@sha256:([0-9a-f]{64})$", image or "")
-    root = os.path.join(rules_dir or frozen_args.RULES_DIR, "images")
+    root = os.path.join(rules_dir or frozen_args.rules_dir(), "images")
     if not m or not os.path.isdir(root):
         return None
     hits = [os.path.join(root, n) for n in sorted(os.listdir(root))
@@ -220,7 +221,7 @@ def verdict(base, cand, spec=None, image=None):
     except (OSError, ValueError, yaml.YAMLError, KeyError, TypeError, AttributeError) as e:
         changes = {}
         errors.append("cannot classify arguments with the rules in %s: %s: %s"
-                      % (frozen_args.RULES_DIR, type(e).__name__, e))
+                      % (frozen_args.rules_dir(), type(e).__name__, e))
     frozen = {}
     if spec:
         frozen = {"base": frozen_args.check_resolved(spec, base),
@@ -231,6 +232,9 @@ def verdict(base, cand, spec=None, image=None):
 
 
 def main(argv=None):
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("base_log")
     ap.add_argument("cand_log")

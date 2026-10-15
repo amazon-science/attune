@@ -11,16 +11,22 @@
 #   AUTOTUNE_USER                          the operator; owner label value and default run-id prefix
 #   AUTOTUNE_OWNER_LABEL                   owner label key (default: owner)
 #   ATTUNE_RUN_PREFIX                      required run-id prefix (default: "$AUTOTUNE_USER-")
+# Under the launcher these come from the campaign's config.env, and a different value in the environment is refused
+# (exit 2; campaign.py).
 #
 # It refuses (exit 2, nothing deleted) unless the run id is valid, starts with the prefix, and every object that
 # exists carries <AUTOTUNE_OWNER_LABEL>=<AUTOTUNE_USER> exactly (make_run_yaml.py stamps it). Each delete selects by
 # name and owner label, so it cannot remove an object someone else owns. Only a confirmed NotFound counts as already
-# deleted: any other kubectl failure (auth, timeout, forbidden) exits 1, because the run may still hold its GPUs.
+# deleted: any other kubectl failure (auth, timeout, forbidden) exits 1, because the run may still hold its GPUs. Every
+# kubectl call has a 30 s --request-timeout.
 
 set -uo pipefail
 
 case "${1:-}" in -h|--help) sed -n '4,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;; esac
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETTINGS=$(python3 "$HERE/campaign.py" check-settings --shell) || exit 2   # the campaign's config.env decides
+eval "$SETTINGS"
 RUN_ID="${1:?usage: teardown_run.sh <run_id>}"
 : "${AUTOTUNE_KUBECTL_CONTEXT:?set AUTOTUNE_KUBECTL_CONTEXT to the target cluster context}"
 : "${KUBECTL_NS:?set KUBECTL_NS to the namespace of your runs}"
@@ -28,6 +34,7 @@ RUN_ID="${1:?usage: teardown_run.sh <run_id>}"
 OWNER_LABEL="${AUTOTUNE_OWNER_LABEL:-owner}"
 PREFIX="${ATTUNE_RUN_PREFIX:-$AUTOTUNE_USER-}"
 KUBECTL=(kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS")
+TIMEOUT=(--request-timeout=30s)   # a hung API fails each call in 30 s, inside the Bash and Stop hook timeouts
 
 refuse() { echo "[teardown_run.sh] REFUSED: $*" >&2; exit 2; }
 
@@ -42,7 +49,7 @@ fi
 # Prints the object's owner label value, or nothing when the object is absent; exits 1 on any other kubectl failure.
 owner_of() {
   local kind="$1" name="$2" out rc
-  out=$("${KUBECTL[@]}" get "$kind" "$name" -o json 2>&1); rc=$?
+  out=$("${KUBECTL[@]}" get "$kind" "$name" -o json "${TIMEOUT[@]}" 2>&1); rc=$?
   if [ "$rc" -ne 0 ]; then
     if printf '%s' "$out" | grep -q "NotFound"; then echo "<absent>"; return 0; fi
     echo "[teardown_run.sh] ERROR reading $kind/$name: $(printf '%s' "$out" | head -c 300)" >&2
@@ -66,9 +73,10 @@ done
 
 echo "[teardown_run.sh] $RUN_ID in $AUTOTUNE_KUBECTL_CONTEXT/$KUBECTL_NS: ${#PRESENT[@]} object(s) to delete"
 fail=0
-for obj in "${PRESENT[@]}"; do
+for obj in ${PRESENT[@]+"${PRESENT[@]}"}; do   # bash 4.2 calls an empty array unbound under set -u
   read -r kind name <<<"$obj"
-  if out=$("${KUBECTL[@]}" delete "$kind" -l "$OWNER_LABEL=$AUTOTUNE_USER" --field-selector "metadata.name=$name" 2>&1); then
+  if out=$("${KUBECTL[@]}" delete "$kind" -l "$OWNER_LABEL=$AUTOTUNE_USER" --field-selector "metadata.name=$name" \
+           "${TIMEOUT[@]}" 2>&1); then
     echo "  deleted $kind/$name"
   else
     echo "  ERROR deleting $kind/$name: $(printf '%s' "$out" | head -c 300)" >&2

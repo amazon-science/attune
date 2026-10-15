@@ -32,33 +32,46 @@ On four models held out from its development, each starting from the strongest p
 - **Correctness.** A configuration check classes every changed argument as numeric, placement or an allowlisted
   same-math swap; a 20-step convergence check compares the candidate's loss with the baseline's using Megatron-Bridge's
   `validate_convergence` thresholds. `skill/scripts/correctness/PROTOCOL.md` has the rules.
-- **Autonomy.** A Stop hook keeps the agent working until the budget is spent or it records a stop with evidence. A
-  PreToolUse hook allows only read-only tools, the skill's scripts, the agent's own analysis scripts and scoped
-  `kubectl` calls, and a ledger lets a crashed session resume.
+- **Autonomy.** A Stop hook keeps the agent working until the budget is spent or it records a stop with evidence,
+  and a ledger lets a crashed session resume. The launcher gives each campaign read-only copies of the skill and
+  harness and records the hashes of the files a campaign must keep: the scoring, measurement and correctness tools,
+  the campaign's settings and prompts, and the append-only ledger, GPU-hour log and lever catalog. A change to any of
+  them fails the campaign, and no recipe ships from it. A small PreToolUse guard keeps `kubectl` inside the campaign's
+  context, namespace and runs.
 
 ## Requirements
 
-Python 3.10 or later with numpy and PyYAML, and pytest for the tests. The row-building tools in `skill/scripts/data/`
-also need pyarrow and transformers.
+Python 3.10 or later with numpy and PyYAML, and pytest for the tests; the harness hooks also run on Python 3.7. The
+row-building tools in `skill/scripts/data/` also need pyarrow and transformers.
 
 ## Quick start
 
 1. Run the tests, which need no cluster:
    `python3 -m pytest harness/tests skill/scripts/profile_analyzer/tests skill/scripts/tests`
-2. Copy `config.example.env` to `config.env`, fill in your cluster, storage, image and identity settings, and load it
-   with `set -a; . config.env; set +a`.
+2. Copy `config.example.env` to `config.env`, fill in your cluster, storage, image and identity settings and a run
+   prefix for this campaign (`ATTUNE_RUN_PREFIX=<user>-<tag>-`), and load it with `set -a; . config.env; set +a`.
 3. Prepare a working, untuned baseline recipe (`ATTUNE_BASELINE_YAML`), rows packed to the workload length
-   (`skill/scripts/data/` builds and checks them), and a pod that can read run logs (`AUTOTUNE_LOG_POD`).
+   (`skill/scripts/data/` builds and checks them), and a pod that mounts the shared volume read-only to read run logs
+   (`AUTOTUNE_LOG_POD`; `skill/references/measurement.md` §1).
 4. Class your stack's arguments in `skill/scripts/correctness/rules/numerics_list.yaml`; unlisted arguments count as
    numeric. `rules/README.md` documents the formats.
 5. Launch: `harness/launch_campaign.sh <campaign_dir> [goal_prompt.txt]`, with `AUTOTUNE_GPUH_BUDGET` (GPU-hours) or
-   `AUTOTUNE_BUDGET` (ranked runs). Rerun with `--session <id>` to resume. The project folder's `RESULTS.md` holds the
-   leaderboard, and the final report names the shipped recipe.
+   `AUTOTUNE_BUDGET` (ranked runs). Rerun with `--session <id>` to resume; the campaign keeps the settings it started
+   with. Edit `goal_prompt.txt` and `resume_prompt.txt` in the campaign directory only between sessions, before a
+   relaunch: a change while a session runs fails the campaign. The project folder's `RESULTS.md` holds the
+   leaderboard, and the final report names the shipped recipe. The launcher exits 3 when the campaign fails its
+   integrity check (`<campaign_dir>/.attune/integrity_violation.json`), after tearing down the campaign's tracked runs.
 
-The agent creates and deletes jobs on your cluster and spends GPU-hours until the budget is used or it stops. It
-deletes only runs it owns, and the command guard limits what it may run and write, but the guard is a safeguard, not a
-security boundary: use credentials scoped to one namespace and start with a small budget. A campaign's LLM cost was
-about $60 to $110 at list price in our evaluation.
+The agent creates and deletes jobs on your cluster and spends GPU-hours until the budget is used or it stops. The
+guard prevents accidents to ATTUNE's own records and to the cluster scope: every `kubectl` call names the campaign's
+context and namespace, changes only objects named with the campaign's run prefix, and reaches only the campaign's
+pods and the log pod, and the protected files refuse edits. It is not a security boundary, since the agent's other
+commands run unchecked; credentials scoped to one namespace are. The log pod mounts the shared volume read-only, but
+commands the agent runs inside the campaign's own run pods can write to it unchecked. Scores stay safe: finalize
+records each run's metrics in the ledger, and the dataset's `rows_sha256` is checked through the log pod at every
+launch and before a recipe ships. Use namespace-scoped credentials, keep storage the campaign must not change
+read-only to the agent, and start with a small budget. Web access is on by default; evaluation campaigns turn it off
+with `AUTOTUNE_ALLOW_WEB=0`. A campaign's LLM cost was about $60 to $110 at list price in our evaluation.
 
 ## Repository layout
 
@@ -71,7 +84,7 @@ skill/                  the skill
     data/                   fixed-length SFT row builder, loss masks, rollout adapter
     pod_hooks/              in-pod hook loader and registry
   past_tuning_projects/   campaign summaries the skill writes and reads
-harness/                unattended runner: launcher, Stop and PreToolUse hooks, command policy
+harness/                unattended runner: launcher, integrity record, Stop and PreToolUse hooks
 config.example.env      every setting, one line each
 ```
 

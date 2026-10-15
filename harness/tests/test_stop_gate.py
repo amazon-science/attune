@@ -1,11 +1,14 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The Stop hook allows a stop only on convergence, a STOP row or a stall, finds the ledger, and fails closed.
+"""The Stop hook ends a campaign that fails its integrity check, allows a stop only on convergence, a STOP row or a
+stall, finds the ledger, and fails closed.
 Run: python3 -m pytest harness/tests"""
 import json
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -152,3 +155,58 @@ def test_hook_script_end_to_end(gate):
     p = subprocess.run([sys.executable, stop_gate.__file__], input="{}", capture_output=True, text=True,
                        env=dict(os.environ), check=False)
     assert p.returncode == 0 and blocked(p.stdout)
+
+
+def test_an_integrity_violation_ends_the_campaign(sealed, monkeypatch):
+    monkeypatch.setenv("AUTOTUNE_AUTONOMOUS", "1")
+    write(sealed.ledger, [BASE])
+    assert blocked(stop_gate.respond("{}"))
+    write(sealed.ledger, [dict(BASE, metrics={"aggregate_tok_per_s_per_gpu": 999.0})])   # a rewritten row
+    out = json.loads(stop_gate.respond("{}"))
+    assert out["continue"] is False and "integrity violation" in out["stopReason"]
+    assert "rewritten" in out["stopReason"] and (sealed.control / "integrity_violation.json").exists()
+    write(sealed.ledger, [BASE, ranked(1), ranked(2)])   # a converged ledger does not undo it
+    assert json.loads(stop_gate.respond("{}"))["continue"] is False
+
+
+def test_a_campaign_without_its_record_ends(campaign, monkeypatch):
+    monkeypatch.setenv("AUTOTUNE_AUTONOMOUS", "1")
+    (campaign.root / ".attune").mkdir()
+    monkeypatch.setenv("ATTUNE_CONTROL_DIR", str(campaign.root / ".attune"))
+    assert json.loads(stop_gate.respond("{}"))["continue"] is False
+
+
+def test_a_later_row_without_gpuh_keeps_the_earlier_value():
+    rows = [dict(BASE, gpuh=4.0), ranked(1, gpuh=6.0), {"run_id": "alice-m-r1", "kind": "note"}]
+    assert convergence.gpuh_spent(rows, []) == 10.0
+    log = [{"run": "a", "gpuh": 3.0}, {"run": "a", "gpuh": None, "status": "running"}, {"run": "b", "gpuh": 1.5}]
+    assert convergence.gpuh_spent([], log) == 4.5
+
+
+def test_a_violation_tears_down_the_tracked_runs_before_the_session_ends(sealed, monkeypatch):
+    monkeypatch.setenv("AUTOTUNE_AUTONOMOUS", "1")
+    (sealed.root / "proj" / "tracked_jobs.jsonl").write_text('{"run_id": "alice-tune-r1"}\n')
+    (sealed.skill / "references" / "levers.md").write_text("# levers, rewritten\n")
+    out = json.loads(stop_gate.respond("{}"))
+    assert out["continue"] is False and "live runs torn down: alice-tune-r1" in out["stopReason"]
+    assert sealed.torn() == ["alice-tune-r1"]
+
+
+@pytest.mark.parametrize("broken", ["raise ImportError('a broken copy')\n", "def f(:\n"])
+def test_an_integrity_module_that_cannot_load_ends_the_campaign(sealed, tmp_path, broken):
+    harness = tmp_path / "harness"
+    (harness / "hooks").mkdir(parents=True)
+    hooks = Path(stop_gate.__file__).resolve().parent
+    shutil.copy(hooks / "stop_gate.py", harness / "hooks" / "stop_gate.py")
+    shutil.copy(hooks.parent / "convergence.py", harness / "convergence.py")
+    (harness / "integrity.py").write_text(broken)
+    (sealed.root / "proj" / "tracked_jobs.jsonl").write_text('{"run_id": "alice-tune-r1"}\n')
+    env = dict(os.environ, AUTOTUNE_AUTONOMOUS="1")
+    p = subprocess.run([sys.executable, str(harness / "hooks" / "stop_gate.py")], input="{}", capture_output=True,
+                       text=True, env=env, check=False)
+    assert p.returncode == 0, p.stderr
+    out = json.loads(p.stdout)
+    assert out["continue"] is False and "cannot run" in out["stopReason"] and "alice-tune-r1 torn down" in \
+        out["stopReason"]
+    record = json.loads((sealed.control / "integrity_violation.json").read_text())
+    assert record["teardown"]["runs"] == {"alice-tune-r1": "torn down"} and sealed.torn() == ["alice-tune-r1"]

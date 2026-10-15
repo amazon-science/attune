@@ -5,7 +5,7 @@
 
     run_gpuh.py <run_id> [--context CTX] [--namespace NS]            # measure, print JSON
     run_gpuh.py <run_id> --launch --gpus N [--log FILE]               # gpuh.jsonl line at submit
-    run_gpuh.py <run_id> --record [--status S] [--log FILE]           # measure and complete the line
+    run_gpuh.py <run_id> --record [--status S] [--log FILE]           # measure, append the measured line
     run_gpuh.py --total [--log FILE]                                  # campaign total so far
 
 On a cluster with Kueue it reads the run's Workload (admission time, GPU count from its pod sets) and its
@@ -14,9 +14,10 @@ Workload API it charges RayJob startTime -> endTime, with the GPU count summed f
 templates. A still-running job is charged up to now (`final: false`). Call it in finalize BEFORE teardown:
 the Workload and RayJob are deleted with the run.
 Prints one JSON object: {run_id, num_gpus, admitted, end, hours, gpuh, final, source}.
-The campaign GPU-hour log (FILE, default $AUTOTUNE_GPUH_LOG, else ./gpuh.jsonl) holds one line per launch:
-{"run", "gpus", "submitted", "admitted", "ended", "gpuh", "cum_gpuh", "status"}; --launch writes it with nulls,
---record fills admitted/ended/gpuh and cum_gpuh (sum of gpuh over the completed lines, this one included).
+The campaign GPU-hour log (FILE, default $AUTOTUNE_GPUH_LOG, else ./gpuh.jsonl) is append-only (the launcher's
+integrity check holds it to that): lines {"run", "gpus", "submitted", "admitted", "ended", "gpuh", "cum_gpuh",
+"status"}, where --launch appends a run's first line with nulls and every --record appends a measured line. A run's
+last line is its current state; cum_gpuh is the sum of every run's last measured gpuh, this one included.
 Measuring needs the cluster: --context (default $AUTOTUNE_KUBECTL_CONTEXT) and --namespace (default $KUBECTL_NS);
 every kubectl call passes both.
 """
@@ -129,50 +130,59 @@ def read_log(path):
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _update_log(path, fn):
-    """Apply fn(rows) -> result under an exclusive lock; rewrites the file atomically."""
+def _latest(rows):
+    """run -> its last line."""
+    out = {}
+    for r in rows:
+        out[r.get("run")] = r
+    return out
+
+
+def _append_log(path, fn):
+    """fn(rows) -> (line to append or None, result), under an exclusive lock; the log only grows."""
     with open(path + ".lock", "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         rows = read_log(path)
-        out = fn(rows)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.writelines(json.dumps(r) + "\n" for r in rows)
-        os.replace(tmp, path)
+        line, out = fn(rows)
+        if line is not None:
+            with open(path, "a") as f:
+                f.write(json.dumps(line) + "\n")
         return out
 
 
 def _total(rows):
-    """The campaign's charge so far: the sum of gpuh over the completed lines."""
-    return round(sum(r["gpuh"] for r in rows if isinstance(r.get("gpuh"), (int, float))), 3)
+    """The campaign's charge so far: the sum of every run's last measured gpuh (a later unmeasured line leaves it)."""
+    measured = {r.get("run"): r["gpuh"] for r in rows if isinstance(r.get("gpuh"), (int, float))}
+    return round(sum(measured.values()), 3)
 
 
 def log_launch(path, run_id, gpus):
     def fn(rows):
         if any(r.get("run") == run_id for r in rows):
-            return {"run": run_id, "note": "already logged"}
+            return None, {"run": run_id, "note": "already logged"}
         row = {"run": run_id, "gpus": gpus, "submitted": _now(), "admitted": None, "ended": None,
                "gpuh": None, "cum_gpuh": None, "status": "submitted"}
-        rows.append(row)
-        return row
-    return _update_log(path, fn)
+        return row, row
+    return _append_log(path, fn)
 
 
 def log_record(path, m, status):
     def fn(rows):
-        row = next((r for r in rows if r.get("run") == m["run_id"]), None)
-        if row is None:  # launched without a --launch line: add one, submit time unknown
-            row = {"run": m["run_id"], "gpus": m["num_gpus"], "submitted": None}
-            rows.append(row)
-        row.update(gpus=m["num_gpus"] if m["num_gpus"] is not None else row.get("gpus"),
-                   admitted=m["admitted"], ended=m["end"] if m["final"] else None,
-                   gpuh=m["gpuh"] if m["final"] else None, status=status if m["final"] else "running")
-        row["cum_gpuh"] = _total(rows) if m["final"] else None
-        return row
-    return _update_log(path, fn)
+        prev = _latest(rows).get(m["run_id"]) or {}  # launched without a --launch line: submit time unknown
+        row = {"run": m["run_id"], "gpus": m["num_gpus"] if m["num_gpus"] is not None else prev.get("gpus"),
+               "submitted": prev.get("submitted"), "admitted": m["admitted"],
+               "ended": m["end"] if m["final"] else None, "gpuh": m["gpuh"] if m["final"] else None,
+               "cum_gpuh": None, "status": status if m["final"] else "running"}
+        if m["final"]:
+            row["cum_gpuh"] = _total(rows + [row])
+        return row, row
+    return _append_log(path, fn)
 
 
 def main():
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_id", nargs="?")
     ap.add_argument("--log", default=os.environ.get("AUTOTUNE_GPUH_LOG") or "gpuh.jsonl")
@@ -187,8 +197,9 @@ def main():
     a = ap.parse_args()
     if a.total:
         rows = read_log(a.log)
-        print(json.dumps({"cum_gpuh": _total(rows), "runs": len(rows),
-                          "open": [r["run"] for r in rows if r.get("gpuh") is None]}))
+        latest = _latest(rows)
+        print(json.dumps({"cum_gpuh": _total(rows), "runs": len(latest),
+                          "open": [r for r, row in latest.items() if row.get("gpuh") is None]}))
         return
     if not a.run_id:
         ap.error("run_id required")

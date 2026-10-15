@@ -85,8 +85,17 @@ def test_teardown_deletes_exactly_the_owned_objects(cluster):
     p, calls = cluster("teardown_run.sh", "alice-r1", state=state)
     assert p.returncode == 0, p.stderr
     deletes = [c for c in calls if c[0] == "delete"]
-    assert deletes == [["delete", "rayjob", "-l", "owner=alice", "--field-selector", "metadata.name=alice-r1"],
-                       ["delete", "configmap", "-l", "owner=alice", "--field-selector", "metadata.name=alice-r1-scripts"]]
+    t = "--request-timeout=30s"
+    sel = ["-l", "owner=alice", "--field-selector"]
+    assert deletes == [["delete", "rayjob", *sel, "metadata.name=alice-r1", t],
+                       ["delete", "configmap", *sel, "metadata.name=alice-r1-scripts", t]]
+    assert all(c[-1] == t for c in calls), "every kubectl call is bounded"
+
+
+def test_teardown_of_a_run_already_gone_succeeds(cluster):
+    p, calls = cluster("teardown_run.sh", "alice-r1", state={"objects": {}})
+    assert p.returncode == 0 and "0 object(s) to delete" in p.stdout, p.stderr
+    assert not [c for c in calls if c[0] == "delete"]
 
 
 def test_teardown_refuses_another_owner(cluster):

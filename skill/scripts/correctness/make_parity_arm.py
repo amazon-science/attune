@@ -97,6 +97,9 @@ def make_arm(text, run_id, steps):
 
 
 def main():
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True, help="RayJob YAML of the ranked run (baseline or candidate)")
     ap.add_argument("--run-id", required=True, help="run id of this arm (every K8s name and shared-volume path)")

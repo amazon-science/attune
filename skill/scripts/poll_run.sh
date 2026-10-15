@@ -16,6 +16,8 @@
 #   AUTOTUNE_PROJECT_ROOT     default $PWD/attune-projects; <root>/*/tracked_jobs.jsonl is searched for the run's
 #                             `target_steps`
 #   TARGET_STEPS              the last 0-indexed step of a complete run; overrides everything below
+# Under the launcher the settings above except TARGET_STEPS come from the campaign's config.env, and a different value
+# in the environment is refused (exit 2; campaign.py).
 #
 # The target step (the last 0-indexed step of a complete run) is TARGET_STEPS, else the run's own --num-rollout - 1
 # (the log's resolved-argument dump, else the RayJob spec), else its tracked_jobs.jsonl `target_steps`, else
@@ -35,6 +37,9 @@ set -euo pipefail
 
 case "${1:-}" in -h|--help) sed -n '4,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;; esac
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETTINGS=$(python3 "$HERE/campaign.py" check-settings --shell) || exit 2   # the campaign's config.env decides
+eval "$SETTINGS"
 RUN_ID="${1:?usage: poll_run.sh <run_id> [log_access_pod]}"
 if [[ ! "$RUN_ID" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || [ "${#RUN_ID}" -gt 47 ]; then
   echo "poll_run.sh: invalid run id '$RUN_ID' (lowercase letters, digits and '-', at most 47 characters)" >&2
@@ -45,7 +50,6 @@ fi
 LOG_POD="${2:-${AUTOTUNE_LOG_POD:?set AUTOTUNE_LOG_POD (or pass the log-access pod as argument 2)}}"
 EXP_DIR="${AUTOTUNE_EXPERIMENTS_DIR:-/shared/experiments}"
 PROJECT_ROOT="${AUTOTUNE_PROJECT_ROOT:-$PWD/attune-projects}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KUBECTL=(kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS")
 
 RJ_JSON=$(mktemp); DRIVER_JSON=$(mktemp); CLUSTER_JSON=$(mktemp); LOG_LINES=$(mktemp); ERR=$(mktemp)

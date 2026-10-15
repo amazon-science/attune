@@ -22,7 +22,10 @@ probe), and optionally gpus.json {"base": N, "win": M} and images.json {"base": 
      ran), the step-0 loss and grad-norm relative differences, the 20-step mean loss gap, and tokens / logged step
      time per GPU over steps 5-19 (probe tokens when the probe ran, else the logged tokens; with gpus.json) for
      orientation.
-PASS = L1 and L2. Exit 0 when every pair passes, 1 when any pair fails or cannot be scored, 2 when no pair is found.
+PASS = L1 and L2. Exit 0 when every pair passes, 1 when any pair fails or cannot be scored, 2 when no pair is found,
+3 when the campaign fails its integrity check (harness/integrity.py, which also hashes the dataset again through the
+log pod): then nothing is scored and no recipe ships, 4 when the log pod cannot be reached to hash the dataset: nothing
+is scored, retry.
 """
 import argparse
 import hashlib
@@ -34,6 +37,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(1, os.path.dirname(HERE))
+import campaign  # noqa: E402
 import frozen_args  # noqa: E402
 import layer1  # noqa: E402
 
@@ -205,10 +210,21 @@ def report(r):
 
 
 def main(argv=None):
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", help="a pair directory, or a directory whose subdirectories are pair directories")
     ap.add_argument("--json", metavar="FILE", help="also write every pair's result as JSON")
     a = ap.parse_args(argv)
+    problems = campaign.integrity_check("parity_verdict.py (before a recipe ships)", teardown=True, dataset=True)
+    lasting = [p for p in problems if not p.get("transient")]
+    if lasting:
+        print("INTEGRITY VIOLATION: no recipe ships; the campaign has failed: %s; %s"
+              % (campaign.describe(lasting), campaign.teardown_note()), file=sys.stderr)
+        return 3
+    if problems:
+        print("cannot verify the campaign's dataset now, so nothing is scored; retry (exit 4): %s"
+              % campaign.describe(problems), file=sys.stderr)
+        return 4
     pairs = find_pairs(a.root)
     if not pairs:
         print("no pair directory (base.log + win.log) at or under %s" % a.root, file=sys.stderr)

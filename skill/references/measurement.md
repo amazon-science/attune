@@ -36,10 +36,32 @@ is the how-to behind them.
 - **Ray worker pod stdout:** the same `kubectl logs` on a worker pod — rank-0 output (what you want) is
   on the head/driver, not here.
 
-The operator provides a long-lived log-access pod, `$AUTOTUNE_LOG_POD`, that mounts the shared volume at
+The operator provides a long-lived log-access pod, `$AUTOTUNE_LOG_POD`, that mounts the shared volume read-only at
 `$AUTOTUNE_SHARED_MOUNT` and is not part of any RayJob (any small Linux image with bash, coreutils and python3,
 running `sleep infinity`). You read logs and traces through it with read-only `kubectl exec` (`ls`, `cat`,
 `tail`, `grep`) without stopping the job. If it does not exist, ask the operator; do not create pods yourself.
+The launcher starts a campaign only when every mount of the shared volume in the pod is read-only, as here:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: alice-log-access          # $AUTOTUNE_LOG_POD
+spec:
+  containers:
+  - name: main
+    image: <small Linux image with bash, coreutils and python3>
+    command: ["sleep", "infinity"]
+    volumeMounts:
+    - name: shared
+      mountPath: /shared          # $AUTOTUNE_SHARED_MOUNT
+      readOnly: true
+  volumes:
+  - name: shared
+    persistentVolumeClaim:
+      claimName: <the shared volume's claim>
+```
+
 `read_metrics.sh`, `poll_run.sh`, and `teardown_run.sh` pass `$AUTOTUNE_KUBECTL_CONTEXT` and `$KUBECTL_NS` on every
 call.
 

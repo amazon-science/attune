@@ -99,6 +99,12 @@ def node_state(n, used, tolerations):
 
 
 def main(argv=None):
+    try:
+        import campaign
+    except ImportError:  # a copy in the campaign directory: the environment decides
+        campaign = None
+    if campaign:
+        campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("instance_types", nargs="*", help="node.kubernetes.io/instance-type values")
     ap.add_argument("--baseline", help="RayJob YAML whose pod tolerations also count as tolerated")

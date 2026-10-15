@@ -18,6 +18,8 @@
 #
 # With $AUTOTUNE_LOG_POD set, the log is read through that pod (kubectl exec ... cat), which needs
 # $AUTOTUNE_KUBECTL_CONTEXT and $KUBECTL_NS; with it unset or empty, the path is a local file.
+# Under the launcher these settings come from the campaign's config.env, and a different value in the environment is
+# refused (exit 2; campaign.py).
 #
 # Exit codes: 0 valid window; 2 usage; 3 no perf lines in the log; 4 invalid or incomplete window; 5 the log could
 # not be read (kubectl or file error).
@@ -30,6 +32,9 @@ set -euo pipefail
 
 case "${1:-}" in -h|--help) sed -n '4,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;; esac
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETTINGS=$(python3 "$HERE/campaign.py" check-settings --shell) || exit 2   # the campaign's config.env decides
+eval "$SETTINGS"
 LOG_PATH="${1:?usage: read_metrics.sh <train_log_path> [step_start] [step_end] <num_gpus>}"
 # Default window WINDOW_START..N-1 of the unprofiled layout (5-19 by default; see workload.py). A profiled run
 # measures the same window, so the defaults apply to both.

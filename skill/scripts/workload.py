@@ -96,6 +96,9 @@ def profiled(wl, capture=None):
 
 
 def main(argv=None):
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--shell", action="store_true", help="print NAME=value shell assignments instead of JSON")
     a = ap.parse_args(argv)

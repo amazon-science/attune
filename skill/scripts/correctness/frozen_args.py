@@ -41,9 +41,15 @@ import re
 import sys
 
 ENV = "AUTOTUNE_FROZEN_ARGS"
-# The layer-1 rule lists (numerics_list.yaml, layer1/<setup>/): $AUTOTUNE_RULES_DIR, else rules/ beside this file.
+# The layer-1 rule lists (numerics_list.yaml, layer1/<setup>/): RULES_DIR when set (tests), else $AUTOTUNE_RULES_DIR,
+# else rules/ beside this file, resolved when used (after a campaign's settings are in place).
 HERE = os.path.dirname(os.path.abspath(__file__))
-RULES_DIR = os.environ.get("AUTOTUNE_RULES_DIR") or os.path.join(HERE, "rules")
+sys.path.insert(1, os.path.dirname(HERE))  # campaign.py
+RULES_DIR = None
+
+
+def rules_dir():
+    return RULES_DIR or os.environ.get("AUTOTUNE_RULES_DIR") or os.path.join(HERE, "rules")
 
 
 class SpecError(Exception):
@@ -346,6 +352,9 @@ def resolved_args(log_path):
 
 
 def main(argv=None):
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=("check-log", "check-manifest"))
     ap.add_argument("path", help="train.log (check-log) or RayJob/ConfigMap manifest (check-manifest)")

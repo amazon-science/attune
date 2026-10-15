@@ -500,6 +500,9 @@ def build(args, base_text, wl, prof=None):
 
 
 def main(argv=None):
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     args = parse_args(argv)
     check_run_id(args.run_id)
     import workload

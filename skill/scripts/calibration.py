@@ -147,6 +147,9 @@ def show(a):
 
 
 def main(argv=None):
+    import campaign
+
+    campaign.require_settings()  # the campaign's config.env decides its settings
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--require", action="store_true", help="fail unless $%s names a usable file" % ENV)
     sub = ap.add_subparsers(dest="cmd")

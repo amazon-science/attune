@@ -3,7 +3,8 @@
 ## 1. Ledger entry schema (`<project_folder>/AUTOTUNE_LEDGER.jsonl`)
 
 This is the canonical ledger schema; SKILL.md and the harness Stop hook (`harness/convergence.py`) follow it.
-Append-only, one JSON object per line, one ledger per project. The file is
+Append-only, one JSON object per line, one ledger per project; `scripts/ledger_append.py` appends a row. Under the
+launcher a rewritten, truncated or deleted row fails the campaign's integrity check. The file is
 `${AUTOTUNE_PROJECT_ROOT:-$PWD/attune-projects}/<project_tag>/AUTOTUNE_LEDGER.jsonl` (project_tag = baseline YAML
 basename minus `.yaml`, lowercased), or `$AUTOTUNE_LEDGER` when that is set. `run_id` carries the full
 `<prefix><project_tag>-<suffix>` name, identical in the ledger and in K8s — never a bare suffix. (The `exp-NNNN`
@@ -73,7 +74,7 @@ in the example are illustrative placeholders, not results.)
   "Verdict" (no throughput rerun of a tie).
 - `compared_leader_run_id`, `delta_vs_leader_pct` *(required for a ranked terminal row)* — the leader and delta used for the verdict at completion time. This matters when concurrent jobs finish after another result has already promoted a new leader.
 - `delta_vs_baseline_pct` *(required for a ranked terminal row)* — end-to-end gain against the original fixed-allocation baseline.
-- `gpuh`, `gpuh_cumulative` *(terminal; required in GPU-hour budget mode, SKILL.md "When to stop")* — this run's GPU-hours (`num_gpus x` admission -> job end, copied from the run's completed `gpuh.jsonl` line (`scripts/run_gpuh.py <run_id> --record`, before teardown); 0 if never admitted) and the campaign total after it, summed over every row: baseline, ranked, confirm, failed, killed and correctness-check (`kind: parity`) runs. One row per run_id carries its `gpuh`.
+- `gpuh`, `gpuh_cumulative` *(terminal; required in GPU-hour budget mode, SKILL.md "When to stop")* — this run's GPU-hours (`num_gpus x` admission -> job end, copied from the run's completed `gpuh.jsonl` line (`scripts/run_gpuh.py <run_id> --record`, before teardown; the log is append-only and a run's last line counts); 0 if never admitted) and the campaign total after it, summed over every row: baseline, ranked, confirm, failed, killed and correctness-check (`kind: parity`) runs. One row per run_id carries its `gpuh`.
 - `objective_class` *(required on a WIN row)* — `structural` (placement/scheduling only, including packing / `--max-tokens-per-gpu` / `--micro-batch-size` changes, also with a per-microbatch MoE aux loss) `same_math` (a fusion, kernel or dispatcher implementation, optimizer offload or other same-function swap: shippable only where the setup's allowlist lists it) or `numeric` (touches gradient/optimizer/precision/loss/routing/batch — see the objective-preserving Invariant in SKILL.md). A `numeric` win is never shipped; a `same_math` one only with the allowlist entry and `parity_checked:true`.
 - `parity_checked` *(required before shipping any recipe)* — `true` only when the correctness check (`scripts/correctness/PROTOCOL.md`: the baseline's and this recipe's own unprofiled benchmark runs, paired by `pair_from_runs.py` and scored by `parity_verdict.py`) PASSes for this recipe vs the baseline. Record both run_ids (the recipe's side is its ranked run, or its `confirm` run when the ranked run was profiled) and the per-layer result in `what_i_learned`. **Do not label a recipe/change "training-neutral" anywhere (recipe header, RESULTS.md, PR) unless this is true.**
 - `verified_from_source` *(required whenever a run changes any flag)* — the `file:line`(s) in the running image's `arguments.py`/source where you confirmed each changed flag's resolved behavior (what it sets/asserts, and what it silently overrides). Per SKILL.md loop step L2, no flag is tried un-read; this field records that you read it. Guards against memory/hallucination and silent flag-override (e.g. grad-reduce-in-bf16).
@@ -100,8 +101,8 @@ placement axis moved per run); `diagnosis` names the run it came from. Mirror th
 written; the RESULTS.md header records the cap.
 
 **Terminal discipline:** a `completed|errored|killed` entry is terminal. Per SKILL.md's ordered
-transition: validate metrics → append the ledger row (never overwrite a prior line for the same
-run_id) and rewrite `RESULTS.md` → teardown → drop the `tracked_jobs.jsonl` line. Don't decouple the
+transition: validate metrics → append the ledger row with `ledger_append.py` (never overwrite a prior line for the
+same run_id) and rewrite `RESULTS.md` → teardown → drop the `tracked_jobs.jsonl` line. Don't decouple the
 ledger from `RESULTS.md`.
 
 ---
