@@ -1,0 +1,366 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "team-main",
+    "namespace": "team"
+   },
+   "spec": {
+    "clusterQueue": "team-main"
+   },
+   "status": {
+    "admittedWorkloads": 91,
+    "pendingWorkloads": 0,
+    "flavors": [
+     {
+      "name": "gpu-p5e",
+      "nodeLabels": {
+       "node.kubernetes.io/instance-type": "p5e.48xlarge"
+      },
+      "resources": [
+       "cpu",
+       "memory",
+       "nvidia.com/gpu",
+       "vpc.amazonaws.com/efa"
+      ]
+     },
+     {
+      "name": "gpu-p5en",
+      "nodeLabels": {
+       "node.kubernetes.io/instance-type": "p5en.48xlarge"
+      },
+      "resources": [
+       "cpu",
+       "memory",
+       "nvidia.com/gpu",
+       "vpc.amazonaws.com/efa"
+      ]
+     },
+     {
+      "name": "cpu",
+      "nodeLabels": {
+       "node.kubernetes.io/instance-type": "c5.24xlarge"
+      },
+      "resources": [
+       "cpu",
+       "memory",
+       "nvidia.com/gpu",
+       "vpc.amazonaws.com/efa"
+      ]
+     }
+    ],
+    "flavorsReservation": [
+     {
+      "name": "gpu-p5e",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "4805"
+       },
+       {
+        "name": "memory",
+        "total": "41465808Mi"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "432"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "1648"
+       }
+      ]
+     },
+     {
+      "name": "gpu-p5en",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "3228"
+       },
+       {
+        "name": "memory",
+        "total": "38800Gi"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "280"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "400"
+       }
+      ]
+     },
+     {
+      "name": "cpu",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "8100m"
+       },
+       {
+        "name": "memory",
+        "total": "16640Mi"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     }
+    ],
+    "flavorUsage": [
+     {
+      "name": "gpu-p5e",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "4805"
+       },
+       {
+        "name": "memory",
+        "total": "41465808Mi"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "432"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "1648"
+       }
+      ]
+     },
+     {
+      "name": "gpu-p5en",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "3228"
+       },
+       {
+        "name": "memory",
+        "total": "38800Gi"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "280"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "400"
+       }
+      ]
+     },
+     {
+      "name": "cpu",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "8100m"
+       },
+       {
+        "name": "memory",
+        "total": "16640Mi"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "team-urgent",
+    "namespace": "team"
+   },
+   "spec": {
+    "clusterQueue": "team-urgent"
+   },
+   "status": {
+    "admittedWorkloads": 0,
+    "pendingWorkloads": 0,
+    "flavors": [
+     {
+      "name": "gpu-p5e",
+      "nodeLabels": {
+       "node.kubernetes.io/instance-type": "p5e.48xlarge"
+      },
+      "resources": [
+       "cpu",
+       "memory",
+       "nvidia.com/gpu",
+       "vpc.amazonaws.com/efa"
+      ]
+     },
+     {
+      "name": "gpu-p5en",
+      "nodeLabels": {
+       "node.kubernetes.io/instance-type": "p5en.48xlarge"
+      },
+      "resources": [
+       "cpu",
+       "memory",
+       "nvidia.com/gpu",
+       "vpc.amazonaws.com/efa"
+      ]
+     },
+     {
+      "name": "cpu",
+      "nodeLabels": {
+       "node.kubernetes.io/instance-type": "c5.24xlarge"
+      },
+      "resources": [
+       "cpu",
+       "memory",
+       "nvidia.com/gpu",
+       "vpc.amazonaws.com/efa"
+      ]
+     }
+    ],
+    "flavorsReservation": [
+     {
+      "name": "gpu-p5e",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "0"
+       },
+       {
+        "name": "memory",
+        "total": "0"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     },
+     {
+      "name": "gpu-p5en",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "0"
+       },
+       {
+        "name": "memory",
+        "total": "0"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     },
+     {
+      "name": "cpu",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "0"
+       },
+       {
+        "name": "memory",
+        "total": "0"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     }
+    ],
+    "flavorUsage": [
+     {
+      "name": "gpu-p5e",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "0"
+       },
+       {
+        "name": "memory",
+        "total": "0"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     },
+     {
+      "name": "gpu-p5en",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "0"
+       },
+       {
+        "name": "memory",
+        "total": "0"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     },
+     {
+      "name": "cpu",
+      "resources": [
+       {
+        "name": "cpu",
+        "total": "0"
+       },
+       {
+        "name": "memory",
+        "total": "0"
+       },
+       {
+        "name": "nvidia.com/gpu",
+        "total": "0"
+       },
+       {
+        "name": "vpc.amazonaws.com/efa",
+        "total": "0"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

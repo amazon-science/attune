@@ -6,7 +6,7 @@
 # derived: recomputed by layer 1 from the accepted arguments it is derived from (layer1.derived_ok);
 #   it may move only as a consequence of those, and an arbitrary override is refused.
 version: 1
-numeric:  # 499
+numeric:  # 501
   - accumulate_allreduce_grads_in_fp32
   - activation_func_clamp_value
   - adam_beta1
@@ -427,6 +427,7 @@ numeric:  # 499
   - ci_inject_rollout_data_min_match_ratio
   - ci_inject_rollout_data_path
   - ci_inject_rollout_data_start_rollout_id
+  - compress_ratios  # miles arguments.py:2680, the HF config's KV-compressor schedule
   - critic_load
   - critic_lr
   - critic_lr_warmup_iters
@@ -476,6 +477,7 @@ numeric:  # 499
   - moe_router_freeze_gate
   - mtp_hybrid_override_pattern
   - mtp_use_repeated_layer
+  - multi_lora  # miles multi_lora.py:69, multi_lora_n_adapters > 0
   - multi_lora_adapters
   - multi_lora_api_port
   - multi_lora_backend_path
@@ -651,7 +653,7 @@ allowlisted:  # 26
   - use_torch_optimizer_for_cpu_offload
 derived:  # 1
   - padded_vocab_size
-ignored:  # 1388
+ignored:  # 1390
   - adlr_autoresume
   - adlr_autoresume_interval
   - allow_ambiguous_pad_tokens
@@ -990,6 +992,7 @@ ignored:  # 1388
   - ci_check_model_hash
   - ci_disable_logprobs_checker
   - ci_disable_weight_update_checker
+  - ci_enable_metrics_capture  # miles arguments.py:2706, CI metrics tracking backend
   - ci_ft_test_actions
   - ci_metric_checker_key
   - ci_metric_checker_threshold
@@ -1451,6 +1454,7 @@ ignored:  # 1388
   - eval_sglang_weight_loader_prefetch_checkpoints
   - eval_sglang_weight_loader_prefetch_num_threads
   - eval_sglang_weight_version
+  - eval_uses_snapshots  # miles arguments.py:81, eval backend selection
   - ft_components
   - inference_dynamic_batching_cuda_graph_max_tokens
   - inference_dynamic_batching_cuda_graph_mixed_prefill_count

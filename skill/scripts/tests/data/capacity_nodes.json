@@ -1,0 +1,84 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "node-0.example.internal",
+    "labels": {
+     "node.kubernetes.io/instance-type": "p5en.48xlarge"
+    }
+   },
+   "spec": {},
+   "status": {
+    "allocatable": {
+     "nvidia.com/gpu": "8"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "node-1.example.internal",
+    "labels": {
+     "node.kubernetes.io/instance-type": "p5en.48xlarge"
+    }
+   },
+   "spec": {},
+   "status": {
+    "allocatable": {
+     "nvidia.com/gpu": "8"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "node-2.example.internal",
+    "labels": {
+     "node.kubernetes.io/instance-type": "p5en.48xlarge"
+    }
+   },
+   "spec": {},
+   "status": {
+    "allocatable": {
+     "nvidia.com/gpu": "8"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "node-3.example.internal",
+    "labels": {
+     "node.kubernetes.io/instance-type": "p5en.48xlarge"
+    }
+   },
+   "spec": {},
+   "status": {
+    "allocatable": {
+     "nvidia.com/gpu": "8"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  }
+ ]
+}

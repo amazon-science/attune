@@ -1,0 +1,48 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "run-0-head",
+    "namespace": "team"
+   },
+   "spec": {
+    "nodeName": "node-2.example.internal",
+    "containers": [
+     {
+      "name": "c",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "8"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  },
+  {
+   "metadata": {
+    "name": "run-1-head",
+    "namespace": "team"
+   },
+   "spec": {
+    "nodeName": "node-3.example.internal",
+    "containers": [
+     {
+      "name": "c",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "8"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ ]
+}

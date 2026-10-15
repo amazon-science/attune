@@ -98,7 +98,7 @@ with open(perf_file) as f:
 pat_step = re.compile(r"perf (\d+): \{(.*)\}")
 pat_kv = re.compile(r"'([^']+)': ([0-9.eE+-]+)")
 
-pat_ts = re.compile(r"\[(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?)\]")
+pat_ts = re.compile(r"\[(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?)(?: [^\]]*)?\]")   # slime; miles adds " <worker>"
 steps = {}
 stamps = {}           # step -> datetime of its perf line (the log's own clock)
 all_step_ids = []

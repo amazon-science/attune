@@ -9,6 +9,7 @@ Run: python3 -m pytest skill/scripts/tests"""
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -243,6 +244,14 @@ def test_read_metrics_default_window(cluster, tmp_path):
     assert r["window"] == [5, 19] and r["window_n"] == 15 and r["aggregate_tok_per_s_per_gpu"] == 56.25
     p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=23), AUTOTUNE_NUM_GPUS="16")   # a profiled run
     assert p.returncode == 0 and r["window"] == [5, 19] and r["window_n"] == 15, p.stderr
+
+
+def test_read_metrics_reads_miles_timestamps(cluster, tmp_path):
+    """miles logs "[<time> <worker>] file.py:N - perf N: {...}"; the timing check must still find the time."""
+    log = re.sub(r"^\[([^\]]+)\]", r"[\1 actor_cell0_rank0]", fixtures.train_log(steps=20), flags=re.M)
+    assert "actor_cell0_rank0] train_metric_utils.py" in log
+    p, r, _ = _metrics(cluster, tmp_path, log, "5", "19", "16")
+    assert p.returncode == 0 and r["valid"], r.get("invalid_reason")
 
 
 def test_read_metrics_through_the_log_pod(cluster, tmp_path):

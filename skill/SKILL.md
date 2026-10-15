@@ -478,10 +478,13 @@ have been written; any other change fails the campaign, and no recipe ships from
 
 Listed in the order you use them in a cycle — what each does and when to call it:
 
-- **`check_gpu_capacity.py [instance-types…] [--baseline <yaml>]`** — reports GPU nodes
-  free/occupied/broken/cordoned/tainted for your instance types (the arguments, else `$AUTOTUNE_INSTANCE_TYPES`;
-  one of the two is required); `--baseline` treats the taints the run's pods tolerate as free. Call at **loop step
-  L3** before launching: need free ≥ nodes_needed, else queue (don't shrink to fit).
+- **`check_gpu_capacity.py [instance-types…] [--baseline <yaml>] [--nodes N]`** — reports the GPU capacity for your
+  instance types (the arguments, else `$AUTOTUNE_INSTANCE_TYPES`; one of the two is required) from the best source
+  the identity may read: the Kueue ClusterQueue's free quota, else nodes free/occupied/broken/cordoned/tainted (with
+  the LocalQueue's reserved GPUs and pending workloads), else one line "capacity unknown: Kueue admits runs". It
+  prints the `source:` and `fits: yes|no|unknown` for nodes_needed (`--nodes`, else the `--baseline` RayJob's GPU
+  pods); `--baseline` also treats the taints the run's pods tolerate as free. Call at **loop step L3** before
+  launching: need free ≥ nodes_needed, else queue (don't shrink to fit).
 - **`make_run_yaml.py --base <yaml> --run-id <id> --out <yaml> [--set/--unset/--add FLAG=VAL] [--benchmark] [--with-profiler]`**
   — clones the baseline YAML into a new run, editing only run_id + training CLI flags (never
   image/nodeAffinity; `--benchmark` adds `AUTOTUNE_SEQ_LEN` and the hook chain's mount, `PYTHONPATH` prefix and
