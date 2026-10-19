@@ -1,0 +1,11 @@
+# Example known-defects file (format only; the entry is illustrative, not a real defect). Layer 1 reads it beside the
+# frozen-arguments file in use ($AUTOTUNE_FROZEN_ARGS). A candidate whose resolved arguments put `arg` at one of
+# `values` (`any`: any value other than the baseline's) while every `when` condition holds, when the baseline's do not,
+# fails layer 1, and the verdict prints the reason and evidence. Each entry needs both: record what you measured.
+version: 1
+defects:
+- arg: example_fused_kernel
+  values: [true]
+  when: {example_backend: example_value}
+  reason: the fused kernel returns wrong results with this backend on this stack
+  evidence: component test against an FP32 reference failed on this image and GPU (link your record here)

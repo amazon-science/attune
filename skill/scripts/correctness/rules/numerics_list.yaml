@@ -1,38 +1,211 @@
 # Layer-1 argument classes of the correctness check (layer1.py), over the resolved arguments of one Megatron-LM +
-# slime build, extended with the arguments of miles v0.1.0 (78527b91) and its DeepSeek-V4 model. A resolved argument
-# that differs between baseline and candidate FAILS if its class is numeric (or an allowlisted name takes a value
-# outside the setup's allowlist.yaml). Unlisted names (a new image) are numeric (fail
-# closed), so extend the list for a new image: class every name in its resolved-argument dump (README.md).
+# slime build, extended with the arguments of miles v0.1.0 (78527b91) and its DeepSeek-V4 model, and of miles bfdcff0e
+# (Muse Spark, PR #4111) with Megatron-LM 6530834a ("# uncertain": numeric until a component test). A resolved argument
+# that differs between baseline and candidate FAILS layer 1 if its class is objective: the data, sampling, batch, run
+# length, learning-rate and weight-decay schedule, optimizer and trained parameters, loss terms, dropout, precision
+# format, token dropping and routing semantics that define what is trained.
+# A numeric change, and a change of a name this list does not know (a new image), is unknown: it passes layer 1, the
+# step-0 check judges it, and the verdict lists it for human review. Class every name of a new image's dump (README.md).
 # derived: recomputed by layer 1 from the accepted arguments it is derived from (layer1.derived_ok);
 #   it may move only as a consequence of those, and an arbitrary override is refused.
 version: 1
-numeric:  # 501
+objective:  # 182
   - accumulate_allreduce_grads_in_fp32
-  - activation_func_clamp_value
+  - activation_func_fp8_input_store
   - adam_beta1
   - adam_beta2
   - adam_eps
+  - advantage_estimator
+  - apply_chat_template
+  - apply_chat_template_kwargs
+  - apply_wd_to_qk_layernorm
+  - attention_dropout
+  - attention_softmax_in_fp32
+  - autocast_dtype
+  - bf16
+  - calculate_per_token_loss
+  - chat_template
+  - chat_template_path
+  - clip_grad
+  - critic_lr
+  - critic_lr_warmup_iters
+  - data_path
+  - dataloader_type
+  - debug_disable_optimizer
+  - decoupled_lr
+  - decoupled_min_lr
+  - disable_bf16_reduced_precision_matmul
+  - dsa_indexer_loss_coeff
+  - enable_autocast
+  - end_weight_decay
+  - entropy_coef
+  - eod_mask_loss
+  - eps_clip
+  - eps_clip_c
+  - eps_clip_high
+  - exp_avg_dtype
+  - exp_avg_sq_dtype
+  - first_last_layers_bf16
+  - fp16
+  - fp16_lm_cross_entropy
+  - fp32_residual_connection
+  - fp4
+  - fp4_param
+  - fp4_recipe
+  - fp8
+  - fp8_amax_compute_algo
+  - fp8_amax_history_len
+  - fp8_dot_product_attention
+  - fp8_margin
+  - fp8_multi_head_attention
+  - fp8_output_proj
+  - fp8_param
+  - fp8_recipe
+  - fp8_wgrad
+  - freeze_all_layers
+  - freeze_e_score_correction_bias
+  - freeze_indexer
+  - freeze_params_name_list
+  - gamma
+  - global_batch_size
+  - grad_reduce_in_bf16
+  - grpo_clamp_eps_lower
+  - grpo_clamp_eps_upper
+  - grpo_entropy_term_weight
+  - grpo_group_size
+  - grpo_kl_beta
+  - grpo_prompts_per_step
+  - grpo_samples_per_iteration
+  - grpo_std_normalization
+  - head_lr_mult
+  - hidden_dropout
+  - input_key
+  - kl_coef
+  - kl_loss_coef
+  - kl_loss_type
+  - label_key
+  - lambd
+  - lion_beta1
+  - lion_beta2
+  - logits_load_kd_loss_alpha
+  - lora_alpha
+  - lora_dropout
+  - lora_rank
+  - lora_type
+  - loss_mask_type
+  - loss_type
+  - lr
+  - lr_decay_iters
+  - lr_decay_samples
+  - lr_decay_steps
+  - lr_decay_style
+  - lr_warmup_fraction
+  - lr_warmup_init
+  - lr_warmup_iters
+  - lr_warmup_samples
+  - lr_warmup_steps
+  - lr_wsd_decay_iters
+  - lr_wsd_decay_samples
+  - lr_wsd_decay_style
+  - main_grads_dtype
+  - main_params_dtype
+  - mamba_training_ssm_states_dtype
+  - metadata_key
+  - min_lr
+  - moe_activation_in_fp32
+  - moe_apply_probs_on_input
+  - moe_aux_loss_coeff
+  - moe_combine_in_fp32
+  - moe_expert_capacity_factor
+  - moe_expert_rank_capacity_factor
+  - moe_input_jitter_eps
+  - moe_pad_expert_input_to_capacity
+  - moe_router_bias_update_rate
+  - moe_router_dtype
+  - moe_router_enable_expert_bias
+  - moe_router_force_load_balancing
+  - moe_router_freeze_gate
+  - moe_router_group_topk
+  - moe_router_load_balancing_type
+  - moe_router_num_groups
+  - moe_router_pre_softmax
+  - moe_router_score_function
+  - moe_router_topk
+  - moe_router_topk_limited_devices
+  - moe_router_topk_scaling_factor
+  - moe_token_drop_policy
+  - moe_token_dropping
+  - moe_z_loss_coeff
+  - mtp_loss_scaling_factor
+  - muon_coefficient_type
+  - muon_extra_scale_factor
+  - muon_fp32_matmul_prec
+  - muon_momentum
+  - muon_nesterov
+  - muon_num_ns_steps
+  - muon_scalar_optimizer
+  - muon_scale_mode
+  - muon_split_qkv
+  - muon_use_nesterov
+  - n_samples_per_prompt
+  - no_weight_decay_cond_type
+  - normalize_advantages
+  - num_epoch
+  - num_layers_at_end_in_bf16
+  - num_layers_at_start_in_bf16
+  - num_rollout
+  - num_steps_per_rollout
+  - only_train_params_name_list
+  - opd_kl_coef
+  - optimizer
+  - params_dtype
+  - prompt_data
+  - qk_clip
+  - qk_clip_alpha
+  - qk_clip_threshold
+  - quant_recipe
+  - rampup_batch_size
+  - rewards_normalization
+  - rollout_batch_size
+  - rollout_seed
+  - rollout_shuffle
+  - seed
+  - seq_length
+  - sft_tokenizer_prompt_format
+  - sgd_momentum
+  - split
+  - start_weight_decay
+  - step_batch_size_schedule
+  - stream_optimizer_state_moment_dtype
+  - tis_clip
+  - tis_clip_low
+  - train_data_path
+  - train_iters
+  - train_samples
+  - use_dynamic_global_batch_size
+  - use_kitchen
+  - use_kl_loss
+  - use_tis
+  - use_unbiased_kl
+  - value_clip
+  - wd_incr_steps
+  - weight_decay
+  - weight_decay_incr_style
+  - wsd_decay_steps
+numeric:  # 480
+  - activation_func_clamp_value
   - add_bias_linear
   - add_position_embedding
   - add_qkv_bias
-  - advantage_estimator
   - allgather_cp
-  - apply_chat_template
-  - apply_chat_template_kwargs
   - apply_query_key_layer_scaling
   - apply_residual_connection_post_layernorm
   - apply_rope_fusion
-  - apply_wd_to_qk_layernorm
   - attention_backend
-  - attention_dropout
   - attention_output_gate
-  - attention_softmax_in_fp32
   - batch_invariant_mode
-  - bf16
   - block_data_path
   - buffer_filter_path
-  - calculate_per_token_loss
-  - clip_grad
   - compute_advantages_and_returns
   - consumed_train_samples
   - cp_comm_type
@@ -53,25 +226,19 @@ numeric:  # 501
   - data_args_path
   - data_parallel_random_init
   - data_parallel_sharding_strategy
-  - data_path
   - data_source_path
-  - dataloader_type
   - ddp_average_in_collective
   - ddp_reduce_scatter_with_fp32_accumulation
   - debug_rollout_only
   - debug_train_only
   - decoder_num_layers
   - decoder_seq_length
-  - decoupled_lr
-  - decoupled_min_lr
   - decrease_batch_size_if_needed
   - deterministic_mode
   - dino_head_hidden_size
-  - disable_bf16_reduced_precision_matmul
   - disable_jit_fuser
   - distributed_backend
   - dsa_indexer_head_dim
-  - dsa_indexer_loss_coeff
   - dsa_indexer_n_heads
   - dsa_indexer_topk
   - dsa_indexer_use_sparse_loss
@@ -81,60 +248,26 @@ numeric:  # 501
   - enable_mtp_training
   - encoder_num_layers
   - encoder_seq_length
-  - end_weight_decay
-  - entropy_coef
-  - eod_mask_loss
-  - eps_clip
-  - eps_clip_c
-  - eps_clip_high
   - error_injection_rate
   - error_injection_type
   - eval_prompt_data
   - evidence_data_path
-  - exp_avg_dtype
-  - exp_avg_sq_dtype
   - experimental_attention_variant
   - fallback_to_eager_attn
   - ffn_hidden_size
   - finetune
-  - first_last_layers_bf16
-  - fp16
-  - fp16_lm_cross_entropy
-  - fp32_residual_connection
-  - fp4
-  - fp4_param
   - fp4_quantizer_factory
-  - fp4_recipe
-  - fp8
-  - fp8_amax_compute_algo
-  - fp8_amax_history_len
   - fp8_interval
-  - fp8_margin
   - fp8_param_gather
   - fp8_quantizer_factory
-  - fp8_recipe
-  - fp8_wgrad
-  - freeze_params_name_list
-  - gamma
-  - global_batch_size
   - glu_linear_offset
-  - grad_reduce_in_bf16
   - gradient_reduce_div_fusion
   - group_query_attention
-  - grpo_clamp_eps_lower
-  - grpo_clamp_eps_upper
-  - grpo_entropy_term_weight
   - grpo_filter_groups_with_same_reward
-  - grpo_group_size
   - grpo_iterations
-  - grpo_kl_beta
-  - grpo_prompts_per_step
-  - grpo_std_normalization
-  - head_lr_mult
   - heterogeneous_layers_config_encoded_json
   - heterogeneous_layers_config_path
   - hf_checkpoint
-  - hidden_dropout
   - hidden_size
   - hierarchical_context_parallel_sizes
   - hybrid_attention_ratio
@@ -146,18 +279,12 @@ numeric:  # 501
   - init_method_xavier_uniform
   - init_model_with_meta_device
   - initial_loss_scale
-  - input_key
   - is_hybrid_model
   - iterations_to_skip
   - keep_old_actor
   - kitchen_attention_backend
-  - kl_coef
-  - kl_loss_coef
-  - kl_loss_type
   - kv_channels
   - kv_lora_rank
-  - label_key
-  - lambd
   - layernorm_epsilon
   - layernorm_zero_centered_gamma
   - legacy_tokenizer
@@ -174,23 +301,8 @@ numeric:  # 501
   - load_forge_rollout_data
   - load_main_params_from_ckpt
   - log_loss_scale_to_tensorboard
-  - loss_mask_type
   - loss_scale
   - loss_scale_window
-  - loss_type
-  - lr
-  - lr_decay_iters
-  - lr_decay_samples
-  - lr_decay_style
-  - lr_warmup_fraction
-  - lr_warmup_init
-  - lr_warmup_iters
-  - lr_warmup_samples
-  - lr_wsd_decay_iters
-  - lr_wsd_decay_samples
-  - lr_wsd_decay_style
-  - main_grads_dtype
-  - main_params_dtype
   - make_vocab_size_divisible_by
   - mamba_head_dim
   - mamba_num_groups
@@ -205,87 +317,47 @@ numeric:  # 501
   - megatron_config_path
   - megatron_to_hf_mode
   - merge_file
-  - metadata_key
   - min_loss_scale
-  - min_lr
   - mock_data
-  - moe_apply_probs_on_input
-  - moe_aux_loss_coeff
   - moe_enable_routing_replay
-  - moe_expert_capacity_factor
   - moe_ffn_hidden_size
-  - moe_input_jitter_eps
   - moe_latent_size
   - moe_layer_freq
-  - moe_pad_expert_input_to_capacity
-  - moe_router_bias_update_rate
-  - moe_router_dtype
-  - moe_router_enable_expert_bias
   - moe_router_force_biased
-  - moe_router_force_load_balancing
   - moe_router_fusion
-  - moe_router_group_topk
-  - moe_router_load_balancing_type
-  - moe_router_num_groups
   - moe_router_padding_for_fp8
   - moe_router_padding_for_quantization
-  - moe_router_pre_softmax
-  - moe_router_score_function
-  - moe_router_topk
-  - moe_router_topk_scaling_factor
   - moe_shared_expert_gate
   - moe_shared_expert_intermediate_size
-  - moe_token_drop_policy
   - moe_upcycling_granularity
   - moe_use_legacy_grouped_gemm
   - moe_use_upcycling
-  - moe_z_loss_coeff
   - mrope_section
   - mscale
   - mscale_all_dim
-  - mtp_loss_scaling_factor
   - mtp_num_layers
   - mtp_standalone
   - multi_latent_attention
-  - muon_extra_scale_factor
-  - muon_fp32_matmul_prec
-  - muon_momentum
-  - muon_num_ns_steps
-  - muon_scale_mode
-  - muon_split_qkv
   - muon_tp_mode
-  - muon_use_nesterov
-  - n_samples_per_prompt
   - nccl_communicator_config_path
   - no_load_optim
   - no_load_rng
   - no_persist_layer_norm
   - no_rope_freq
-  - no_weight_decay_cond_type
   - normalization
-  - normalize_advantages
   - num_attention_heads
   - num_distributed_optimizer_instances
-  - num_epoch
   - num_experts
   - num_layers
-  - num_layers_at_end_in_bf16
-  - num_layers_at_start_in_bf16
   - num_query_groups
-  - num_rollout
-  - num_steps_per_rollout
-  - only_train_params_name_list
-  - opd_kl_coef
   - opd_teacher_ckpt_step
   - opd_teacher_load
   - opd_type
   - openai_gelu
   - opsm_delta
-  - optimizer
   - outer_dp_sharding_strategy
   - over_sampling_batch_size
   - override_opt_param_scheduler
-  - params_dtype
   - partial_rollout
   - per_split_data_args_path
   - perform_initialization
@@ -293,27 +365,20 @@ numeric:  # 501
   - post_mlp_layernorm
   - post_self_attn_layernorm
   - pretrained_checkpoint
-  - prompt_data
   - q_lora_rank
-  - qk_clip
-  - qk_clip_alpha
-  - qk_clip_threshold
   - qk_head_dim
   - qk_l2_norm
   - qk_layernorm
   - qk_pos_emb_head_dim
   - quick_geglu
   - qwen_gdn_backend
-  - rampup_batch_size
   - ref_load
   - ref_update_interval
   - reset_attention_mask
   - reset_optimizer_states
   - reset_position_ids
   - retriever_report_topk_accuracies
-  - rewards_normalization
   - rollout_all_samples_process_path
-  - rollout_batch_size
   - rollout_data_postprocess_path
   - rollout_function_path
   - rollout_global_dataset
@@ -321,8 +386,6 @@ numeric:  # 501
   - rollout_max_prompt_len
   - rollout_max_response_len
   - rollout_sample_filter_path
-  - rollout_seed
-  - rollout_shuffle
   - rope_scaling_factor
   - rope_type
   - rotary_base
@@ -331,20 +394,14 @@ numeric:  # 501
   - rotary_scaling_factor
   - rotary_seq_len_interpolation_factor
   - sample_rate
-  - seed
-  - seq_length
   - sft
-  - sft_tokenizer_prompt_format
-  - sgd_momentum
   - sharp_enabled_group
   - skip_train
   - skipped_train_samples
   - softmax_type
   - spec
-  - split
   - squared_relu
   - start_rollout_id
-  - start_weight_decay
   - swiglu
   - symmetric_ar_type
   - te_precision_config_file
@@ -353,8 +410,6 @@ numeric:  # 501
   - tiktoken_num_special_tokens
   - tiktoken_pattern
   - tiktoken_special_tokens
-  - tis_clip
-  - tis_clip_low
   - titles_data_path
   - tokenizer_hf_include_special_tokens
   - tokenizer_hf_use_fast
@@ -365,10 +420,7 @@ numeric:  # 501
   - tokenizer_type
   - tp_comm_overlap_cfg
   - train_backend
-  - train_data_path
   - train_env_vars
-  - train_iters
-  - train_samples
   - transformer_impl
   - trust_remote_code
   - untie_embeddings_and_output_weights
@@ -381,7 +433,6 @@ numeric:  # 501
   - use_fused_weighted_squared_relu
   - use_gated_attention
   - use_kitchen_attention
-  - use_kl_loss
   - use_legacy_models
   - use_megatron_fsdp
   - use_mp_args_from_checkpoint_args
@@ -397,22 +448,16 @@ numeric:  # 501
   - use_sharp
   - use_stateless_adam
   - use_te_activation_func
-  - use_tis
   - use_tokenizer_model_from_checkpoint_args
   - use_torch_fsdp2
-  - use_unbiased_kl
   - v_head_dim
   - valid_data_path
-  - value_clip
   - vocab_extra_ids
   - vocab_file
   - vocab_size
-  - weight_decay
-  - weight_decay_incr_style
   - window_attn_skip_freq
   - window_size
   - yaml_cfg
-  - grpo_samples_per_iteration
   - use_custom_fsdp
   # miles v0.1.0 (78527b91) and DeepSeek-V4 additions
   - activation_func_clamp_shared_expert
@@ -423,20 +468,16 @@ numeric:  # 501
   - batch_size
   - beta_fast
   - beta_slow
-  - chat_template_path
   - ci_inject_rollout_data_min_match_ratio
   - ci_inject_rollout_data_path
   - ci_inject_rollout_data_start_rollout_id
   - compress_ratios  # miles arguments.py:2680, the HF config's KV-compressor schedule
   - critic_load
-  - critic_lr
-  - critic_lr_warmup_iters
   - critic_save
   - custom_async_data_buffer_path
   - custom_megatron_post_save_hook_path
   - custom_update_weight_post_write_path
   - debug_deterministic_collective
-  - debug_disable_optimizer
   - delay_split_train_data_by_dp
   - disable_rollout_trim_samples
   - dsa_attention_backend
@@ -456,25 +497,16 @@ numeric:  # 501
   - experts_shared_outer_loras
   - extra_high_precision_layers_hf
   - extra_high_precision_layers_megatron
-  - freeze_e_score_correction_bias
-  - freeze_indexer
   - fully_async
   - indep_dp
   - linear_attention_backend
   - lora_adapter_path
-  - lora_alpha
   - lora_base_cpu_backup
-  - lora_dropout
-  - lora_rank
   - lora_sync_from_tensor
   - lora_train_only
-  - lora_type
   - max_weight_staleness
   - miles_dsa_topk_backend
   - model_parallel_size
-  - moe_activation_in_fp32
-  - moe_combine_in_fp32
-  - moe_router_freeze_gate
   - mtp_hybrid_override_pattern
   - mtp_use_repeated_layer
   - multi_lora  # miles multi_lora.py:69, multi_lora_n_adapters > 0
@@ -499,17 +531,151 @@ numeric:  # 501
   - rematerialize_param_from_master_weight
   - rollout_submission_granularity
   - skip_actor_forward_only
-  - stream_optimizer_state_moment_dtype
   - target_modules
   - true_on_policy_contract
   - true_on_policy_mode
   - true_on_policy_vocab_size
-  - use_dynamic_global_batch_size
   - use_indexer_replay
   - use_rollout_indexer_replay
   - warmup
   - witness_buffer_size
-placement:  # 101
+  # miles bfdcff0e (Muse Spark, PR #4111) and Megatron-LM 6530834a additions
+  - activation_func
+  - actual_vocab_size
+  - apply_dsa_kernel_fusion
+  - bias_activation_fusion
+  - chunked_muon_master_weights
+  - ci_inject_missing_prefetched_batch_bug
+  - cp_partition_mode  # uncertain
+  - csa_compress_ratios
+  - csa_compress_rotary_base
+  - csa_dense_mode
+  - csa_window_size
+  - custom_agent_function_path  # uncertain
+  - custom_inference_engine_provider_path  # uncertain
+  - dataloader_inter_document_masking
+  - ddp_param_name_patterns_for_fp32_local_accumulation
+  - debug_unified_grad_fused_logprob
+  - dense_grouped_gemm  # uncertain
+  - dsa_impl
+  - dsa_indexer_k_norm_epsilon
+  - dsa_indexer_k_norm_fp32
+  - dsa_indexer_rope_interleaved
+  - dsa_indexer_rotate_activation
+  - dsa_indexer_scoring_relu
+  - dsa_indexer_skip_topk_offset
+  - dsa_indexer_topk_backend
+  - dsa_indexer_topk_freq
+  - dsa_kernel_backend
+  - dsv4_impl
+  - dynamic_context_parallel  # uncertain
+  - embedding_init_method
+  - enable_hyper_connections
+  - experimental_attention_variant_loss_scale_func
+  - fp4_param_gather
+  - fused_residual_rmsnorm
+  - fused_single_qkv_rope
+  - gated_linear_unit
+  - gdn_conv_pad_alignment
+  - gdn_pre_gated_delta_rule_fusion
+  - generate_execute_tool_function_path  # uncertain
+  - generate_max_turns  # uncertain
+  - generate_tool_call_parser  # uncertain
+  - generate_tool_specs_path  # uncertain
+  - head_wise_attn_gate
+  - hetereogenous_dist_checkpoint
+  - heterogeneous_block_specs
+  - hybrid_layer_pattern
+  - indexer_rope_interleave
+  - init_method
+  - kitchen_config_file
+  - kitchen_recipe_number
+  - linear_cp_mode
+  - log_probs_backend
+  - logits_load_decode_threads  # uncertain
+  - logits_load_dir
+  - logits_load_ignore_errors
+  - logits_load_msc_prefetch_depth  # uncertain
+  - logits_load_prefetch_factor  # uncertain
+  - max_seq_len  # uncertain
+  - megatron_fsdp_grad_comm_dtype
+  - megatron_fsdp_main_grads_dtype
+  - megatron_fsdp_main_params_dtype
+  - memory_efficient_layer_norm
+  - metadata_path
+  - mhc_init_gating_factor
+  - mhc_recompute_layer_num
+  - mhc_sinkhorn_iterations
+  - min_dynamic_context_parallel_size  # uncertain
+  - mla_down_proj_fusion
+  - mlp_chunks_for_training  # uncertain
+  - moe_deterministic_combine
+  - moe_hybridep_pad_variable_tokens  # uncertain
+  - moe_mlp_glu_interleave_size
+  - moe_n_hash_layers
+  - moe_ncclep_static_shape  # uncertain
+  - moe_ncclep_use_symm_mem  # uncertain
+  - moe_router_use_torch_mm
+  - moe_shared_expert_glu_interleave_size
+  - moe_single_grouped_bias  # uncertain
+  - moe_single_grouped_weight  # uncertain
+  - mrope_interleaved
+  - mtp_detach_heads
+  - mup_attn_scale_power
+  - mup_base_head_dim
+  - mup_base_hidden_size
+  - mup_embedding_mult
+  - mup_output_mult
+  - mup_width_mult
+  - null_tokenizer_eod_id
+  - null_tokenizer_pad_id
+  - num_moe_experts
+  - num_residual_streams
+  - o_groups
+  - o_lora_rank
+  - optimizer_cuda_graph  # uncertain
+  - output_layer_init_method
+  - pad_packed_seq_alignment  # uncertain
+  - pad_vocab_size
+  - persist_layer_norm
+  - pipeline_dtype
+  - requested_load
+  - rollout_sampling_logprobs_mode
+  - rollout_top_logprobs_num
+  - rotary_base_per_layer
+  - score_centering_is
+  - score_centering_mis_high
+  - score_centering_mis_low
+  - score_centering_tis_clip
+  - sequence_packing_scheduler  # uncertain
+  - sft_mock_dataset_config_json
+  - softmax_scale
+  - special_tokens
+  - thd_max_packed_sequences  # uncertain
+  - thd_tail_padding_policy  # uncertain
+  - tinker_lora_groups
+  - tokenizer_hf_no_include_special_tokens
+  - tokenizer_hf_no_use_fast
+  - tokenizer_sentencepiece_ignore_extra_whitespaces
+  - tp_only_amax_red
+  - use_fused_mhc
+  - use_grouped_gemm_for_dense_mlp  # uncertain
+  - use_grouped_gemm_for_shared_expert  # uncertain
+  - use_layer_wise_distributed_optimizer
+  - use_layer_wise_param_layout
+  - use_mup
+  - use_sampling_support_replay
+  - use_sequence_parallel  # uncertain
+  - use_te_rng_tracker
+  - use_transformer_engine_op_fuser
+  - use_varlen_dataset
+  - varlen_mock_dataset_config_json
+  - varlen_sbhd_validation
+  - yarn_beta_fast
+  - yarn_beta_slow
+  - yarn_correction_range_round_to_int
+  - yarn_original_max_position_embeddings
+placement:  # 140
   - account_for_embedding_in_pipeline_split
   - account_for_loss_in_pipeline_split
   - actor_num_gpus_per_node
@@ -612,6 +778,46 @@ placement:  # 101
   - offload_train_target
   - recompute_activations
   - stream_optimizer_state_to_disk
+  # miles bfdcff0e (Muse Spark, PR #4111) and Megatron-LM 6530834a additions
+  - activation_offload_fraction
+  - batch_p2p_comm
+  - batch_p2p_sync
+  - clear_quantized_weight_workspaces_on_offload
+  - colocate_memory_peak_device
+  - cpu_offloading_activations
+  - cpu_offloading_double_buffering
+  - cpu_offloading_retain_pinned_cpu_buffers
+  - cpu_offloading_weights
+  - cuda_graph_dynamic_microbatches
+  - cuda_graph_modules
+  - cuda_graph_retain_backward_graph
+  - cuda_graph_scope_deprecated
+  - cuda_graph_use_single_mempool
+  - deallocate_pipeline_outputs
+  - delay_offload_until_cuda_graph
+  - delta_offload_bytes_across_pp_ranks
+  - disable_parameter_transpose_cache
+  - fine_grained_offloading_max_inflight_offloads
+  - fsdp_db_use_persist_buf_on_alloc_fail
+  - gradient_checkpointing
+  - high_priority_a2a_comm_stream
+  - megatron_fsdp_cache_param_bucket_views
+  - megatron_fsdp_enable_fine_grained_param_gather
+  - megatron_fsdp_max_pool_double_buffer
+  - megatron_fsdp_prefetch_recompute_forward_weights
+  - moe_flex_dispatcher_num_sms
+  - moe_hybridep_num_blocks_permute
+  - moe_hybridep_num_blocks_unpermute
+  - moe_hybridep_num_sms_preprocessing
+  - moe_paged_stash
+  - moe_paged_stash_buffer_size_factor_cpu
+  - moe_paged_stash_buffer_size_factor_cuda
+  - moe_paged_stash_page_size
+  - num_layers_in_first_pipeline_stage
+  - num_layers_in_last_pipeline_stage
+  - num_microbatches_with_partial_activation_checkpoints
+  - overlap_dispatch_backward_with_experts_wgrad
+  - use_gloo_process_groups
 packing:  # 10
   - balance_by_flops
   - balance_data
@@ -624,7 +830,7 @@ packing:  # 10
   - variable_seq_lengths
   # miles v0.1.0 (78527b91) and DeepSeek-V4 additions
   - qkv_format
-allowlisted:  # 26
+allowlisted:  # 34
   - bias_dropout_fusion
   - bias_gelu_fusion
   - bias_swiglu_fusion
@@ -636,7 +842,10 @@ allowlisted:  # 26
   - moe_grouped_gemm
   - moe_permute_fusion
   - moe_token_dispatcher_type
+  - chunked_optimizer_state_offload
   - offload_optimizer_states
+  - optimizer_state_offload_chunk_size_mb
+  - optimizer_state_offload_fraction
   - optimizer_cpu_offload
   - optimizer_offload_fraction
   - overlap_cpu_optimizer_d2h_h2d
@@ -651,9 +860,15 @@ allowlisted:  # 26
   - tp_comm_split_ag
   - tp_comm_split_rs
   - use_torch_optimizer_for_cpu_offload
+  # miles bfdcff0e (Muse Spark, PR #4111) and Megatron-LM 6530834a additions
+  - moe_permute_fusion_into_hybridep
+  - tp_comm_atomic_ag
+  - tp_comm_atomic_rs
+  - tp_comm_overlap_disable_fc1
+  - tp_comm_overlap_disable_qkv
 derived:  # 1
   - padded_vocab_size
-ignored:  # 1390
+ignored:  # 1538
   - adlr_autoresume
   - adlr_autoresume_interval
   - allow_ambiguous_pad_tokens
@@ -2045,3 +2260,152 @@ ignored:  # 1390
   - use_prometheus
   - use_session_server
   - worker_urls
+  # miles bfdcff0e (Muse Spark, PR #4111) and Megatron-LM 6530834a additions
+  - _cpu_offloading_context
+  - _is_global_batch_size_explicitly_specified
+  - anthropic_intermediate_system_expectation
+  - api_server_host
+  - api_server_port
+  - assistant_text_threshold
+  - async_ckpt_cpu_priority
+  - async_ckpt_io_priority
+  - async_ckpt_use_cpu_shm
+  - async_strategy
+  - barrier_with_L1_time
+  - cache_dir
+  - ci_assert_prefill_lag_max
+  - ci_event_root
+  - ci_ft_test_actions_path
+  - ci_metric_checker_expect_num
+  - ci_tito_special_token_count_threshold
+  - ckpt_fully_parallel_load_exchange_algo
+  - ckpt_fully_parallel_load_process_group
+  - ckpt_fully_parallel_save_process_group
+  - ckpt_load_validate_sharding_integrity
+  - cluster_backend
+  - config
+  - custom_agent_function_mode
+  - demo
+  - deploy_component
+  - deploy_instance_id
+  - disable_msc_deprecated
+  - dist_ckpt_workers
+  - enable_chunked_prefill
+  - enable_sample_ownership_checker
+  - entry
+  - env_report_interval_seconds
+  - eval_global_batch_size
+  - eval_micro_batch_size
+  - exit_signal_handler_for_training
+  - fault_injector_delay_start_iteration
+  - fault_injector_fault_delay
+  - fault_injector_fault_probabilities
+  - fault_injector_fault_types
+  - fault_injector_mtti_seconds
+  - fault_injector_num_ranks
+  - fault_injector_offset_seconds
+  - fault_injector_ranks
+  - fault_injector_seed
+  - finalize_model_grads_func
+  - flight_recorder_dump_on_timeout
+  - flight_recorder_dump_path
+  - flight_recorder_extra_dump_on_exec
+  - flight_recorder_include_only_active
+  - flight_recorder_include_stack_trace
+  - flight_recorder_trace_buffer_size
+  - follow
+  - fully_parallel_load
+  - fully_parallel_save
+  - gpu_sniff_test_interval
+  - grad_scale_func
+  - grad_sync_func
+  - host
+  - inference_controller_addr
+  - inference_cuda_graph_all_prefills
+  - inference_cuda_graph_scope
+  - inference_disable_ep_consensus
+  - inference_disable_triton_nvls_kernels
+  - inference_dynamic_batching_async_sched_mode
+  - inference_dynamic_batching_cuda_graph_sizing_distribution
+  - inference_dynamic_batching_enable_prefix_caching
+  - inference_dynamic_batching_logprobs_mode
+  - inference_dynamic_batching_mamba_memory_ratio
+  - inference_dynamic_batching_prefix_caching_coordinator_policy
+  - inference_dynamic_batching_prefix_caching_eviction_policy
+  - inference_dynamic_batching_prefix_caching_mamba_gb
+  - inference_dynamic_batching_prefix_caching_routing_alpha
+  - inference_dynamic_batching_sampling_backend
+  - inference_dynamic_batching_track_generated_token_events
+  - inference_grouped_gemm_backend
+  - inference_max_requests
+  - inference_moe_disable_fused_quant_kernels
+  - inference_moe_token_dispatcher_type
+  - inference_sampling_seed
+  - inference_shards
+  - inference_text_gen_server_logging
+  - inference_use_synchronous_zmq_collectives
+  - init_expected_num_cells
+  - log_inference_engine_weight_checksums
+  - log_moe_overload_factor
+  - logits_save_dir
+  - logits_save_dtype
+  - logits_save_top_k
+  - logits_save_top_p
+  - logits_save_top_p_min_k
+  - low_mfu_threshold
+  - mamba_inference_conv_states_dtype
+  - mamba_inference_ssm_states_dtype
+  - moe_grad_scale_func
+  - moe_routing_trace_capture_hidden_states
+  - moe_routing_trace_capture_logits
+  - moe_routing_trace_dump_weights
+  - moe_routing_trace_max_training_iters
+  - moe_routing_trace_path
+  - mtp_grad_scale_func
+  - namespaced_radix_cache
+  - no_sync_func
+  - num_speculative_tokens
+  - num_subprocesses
+  - nvtx_ranges
+  - param_sync_func
+  - pool_id
+  - port
+  - pytorch_profiler_collect_callstack
+  - pytorch_profiler_collect_chakra
+  - pytorch_profiler_collect_shapes
+  - record_shapes
+  - rl_consumption_granularity
+  - rl_generation_lag
+  - rl_inference_parsers
+  - rl_kv_cache_management_mode
+  - rl_persist_cuda_graphs
+  - rl_profile
+  - rl_profile_dir
+  - rl_submission_granularity
+  - rollout_external_router_pd
+  - rollout_indexer_topk_num_streams
+  - run_uuid
+  - sample_ownership_grace_steps
+  - save_activations_interval
+  - save_params_interval
+  - save_tokens_per_expert_interval
+  - session_server_external_host
+  - session_server_instances
+  - session_server_workers
+  - session_verify_cycles
+  - specs
+  - start_eval_at_iter
+  - starts_inference_engines
+  - state_file
+  - tensor_lru
+  - termination_grace_period_seconds
+  - timers
+  - tool_call_failure_mode
+  - trainer_controller_addrs
+  - uninstall_manifest
+  - use_inference_optimized_layers
+  - use_nsys_profiler
+  - use_utilization_overview
+  - validation_set_names
+  - verify_integrity
+  - worker_comm_backend

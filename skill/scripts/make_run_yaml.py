@@ -31,9 +31,11 @@ Flag semantics:
   --set     Replace `--flag [value ...]`; VALUE may be empty for a boolean flag. Appends the flag when absent.
   --unset   Remove `--flag [value ...]`; the flag must exist.
   --add     Append `--flag value`; the flag must not exist.
-Edits are token-level: other flags on the same line are kept, and flags in shell or YAML comments or in embedded
-non-shell files (.py, .json, .yaml, ...) are ignored. An appended flag goes before a `2>&1 | tee` line if there is
-one, else at the end of the backslash-continued python command.
+Edits are token-level: other flags on the same line are kept, and flags in shell or YAML comments, in embedded
+non-shell files (.py, .json, .yaml, ...) and in helper python commands (a preflight, a model-args generator) are
+ignored. An appended flag goes on the training command: the one command that launches a training entry point
+(train*.py, pretrain*.py, `python -m ...train...`), else the one command carrying the recipe's parallelism and batch
+flags; before its `2>&1 | tee` line if it has one, else at its end. No single training command is an error.
 
 Examples:
     make_run_yaml.py --base base.yaml --run-id alice-tune-bs4096 --out alice-tune-bs4096.yaml \\
@@ -85,7 +87,7 @@ def parse_args(argv=None):
     ap.add_argument("--profile-steps", default=None, metavar="START-END",
                     help="end-exclusive profile range for unranked diagnostics (default 22-23 with the default step "
                          "counts). slime's profiler setup lands in step START-2, so START-2 must come after the "
-                         "$AUTOTUNE_NUM_STEPS steps of the measured window and the convergence check, and END may not "
+                         "$AUTOTUNE_NUM_STEPS steps of the measured window and the correctness check, and END may not "
                          "exceed --num-rollout; ranked --benchmark runs require the range --profile-capture implies")
     ap.add_argument("--profile-capture", type=int, choices=(1, 2, 3), default=None,
                     help="recorded profiler steps of a profiled run after its setup and warm-up steps (default "
@@ -186,12 +188,69 @@ def _embedded_spans(text: str):
     return [(m.start(), m.end()) for m in _EMBEDDED_FILE.finditer(text)]
 
 
+# The training command launches a training entry point; a helper command runs another python program.
+_TRAIN_ENTRY = re.compile(r"\b(?:python3?(?:\.\d+)?|torchrun|deepspeed)\b[^|;&]*?"
+                          r"(?:\s-m\s+[\w.]*train\w*\b|[\s/](?:pre)?train(?:_\w+)?\.py\b)")
+_PROGRAM = re.compile(r"(?:^|[\s;&|(])(?:python3?(?:\.\d+)?|torchrun|deepspeed)\s")
+TRAIN_MARKERS = ("tensor-model-parallel-size", "pipeline-model-parallel-size", "global-batch-size",
+                 "micro-batch-size", "max-tokens-per-gpu", "num-rollout", "rollout-batch-size")
+
+
+def _commands(text: str):
+    """(lines, [(first, last, joined text)]) of every shell command outside embedded non-shell files and comment
+    lines: a run of backslash-continued lines, joined without its continuations and trailing comments."""
+    lines, spans, pos, out, i = text.split("\n"), _embedded_spans(text), [0], [], 0
+    for line in lines:
+        pos.append(pos[-1] + len(line) + 1)
+    while i < len(lines):
+        if not lines[i].strip() or lines[i].lstrip().startswith("#") or any(a <= pos[i] < b for a, b in spans):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(lines) and lines[j].rstrip().endswith("\\"):
+            j += 1
+        joined = " ".join(re.sub(r"(^|\s)#.*$", "", ln).rstrip().rstrip("\\") for ln in lines[i:j + 1])
+        out.append((i, j, joined))
+        i = j + 1
+    return lines, out
+
+
+def _has_marker(joined: str) -> bool:
+    return any(re.search(rf"(?<!\S)--{f}(?=[\s=]|$)", joined) for f in TRAIN_MARKERS)
+
+
+def training_command(text: str, flag: str):
+    """(lines, first line, last line) of the training command; RuntimeError unless exactly one command qualifies."""
+    lines, cmds = _commands(text)
+    hits = [c for c in cmds if _TRAIN_ENTRY.search(c[2])] or [c for c in cmds if _has_marker(c[2])]
+    if len(hits) != 1:
+        found = "; ".join(repr(lines[c[0]].strip()[:70]) for c in hits) or "none"
+        raise RuntimeError(f"--{flag}: cannot identify the single training command (one that launches train*.py or "
+                           f"`python -m ...train...`, else one carrying --{' / --'.join(TRAIN_MARKERS[:3])}); "
+                           f"found {len(hits)}: {found}")
+    if re.match(r"""^\s*[\w.\-]+:\s*["']""", lines[hits[0][0]]):
+        raise RuntimeError(f"--{flag}: the training command is inside a quoted YAML string; write that script as a "
+                           f"literal block (`key: |`)")
+    return lines, hits[0][0], hits[0][1]
+
+
+def _helper_spans(text: str):
+    """Character spans of helper commands: python programs that are neither a training entry point nor carry the
+    recipe's training flags (a preflight, a model-args generator); their flags are never edited."""
+    lines, cmds = _commands(text)
+    pos = [0]
+    for line in lines:
+        pos.append(pos[-1] + len(line) + 1)
+    return [(pos[a], pos[b + 1]) for a, b, j in cmds
+            if _PROGRAM.search(j) and not _TRAIN_ENTRY.search(j) and not _has_marker(j)]
+
+
 def _flag_matches(text: str, flag: str):
-    """Every `--flag [value ...]` / `--flag=value` occurrence outside comments and embedded non-shell files, as
-    regex matches (token-level: other flags on the same line are untouched; all value words up to the next flag,
-    a line continuation, an operator or newline)."""
+    """Every `--flag [value ...]` / `--flag=value` occurrence outside comments, embedded non-shell files and helper
+    commands, as regex matches (token-level: other flags on the same line are untouched; all value words up to the
+    next flag, a line continuation, an operator or newline)."""
     pat = re.compile(rf"(?<!\S)--{re.escape(flag)}(?:=\S+|(?:[ \t]+(?!--){_VAL_TOK})*)(?=\s|$)")
-    spans = _embedded_spans(text)
+    spans = _embedded_spans(text) + _helper_spans(text)
     return [m for m in pat.finditer(text) if not _in_comment(text, m.start())
             and not any(a <= m.start() < b for a, b in spans)]
 
@@ -208,20 +267,14 @@ def _set_cli_token(yaml_text: str, flag: str, value: str):
 
 
 def _append_cli(yaml_text: str, flag: str, value: str) -> str:
-    """Append `--flag [value]` to the training command: before a `2>&1 | tee` line when there is one, else at the
-    end of the first backslash-continued python command (before any pipe or redirect on its last line)."""
+    """Append `--flag [value]` to the training command (training_command): before its `2>&1 | tee` line when it has
+    one, else at its end (before any pipe or redirect on its last line)."""
     tok = f"--{flag} {value}" if value else f"--{flag}"
-    m = re.search(r"^(\s*)2>&1 \| tee", yaml_text, re.M)
-    if m:
-        return yaml_text[:m.start()] + f"{m.group(1)}{tok} \\\n" + yaml_text[m.start():]
-    lines = yaml_text.split("\n")
-    start = next((i for i, line in enumerate(lines)
-                  if re.match(r"^\s*(?:exec\s+)?python3?\s", line) and line.rstrip().endswith("\\")), None)
-    if start is None:
-        raise RuntimeError(f"--{flag}: could not find the training command to extend")
-    j = start
-    while j + 1 < len(lines) and lines[j].rstrip().endswith("\\"):
-        j += 1
+    lines, start, j = training_command(yaml_text, flag)
+    tee = next((k for k in range(start + 1, j + 1) if re.match(r"^\s*2>&1 \| tee", lines[k])), None)
+    if tee is not None:
+        lines.insert(tee, re.match(r"^(\s*)", lines[tee]).group(1) + f"{tok} \\")
+        return "\n".join(lines)
     op = re.search(r"(?<!\S)(?:\d?>>?|&>|\||;|&&)", lines[j])
     if op:  # keep the pipe/redirect last: the flag goes before it
         lines[j] = lines[j][:op.start()].rstrip() + f" {tok} " + lines[j][op.start():]
@@ -419,7 +472,7 @@ def profiler_flags(text, run_id, steps, wl, prof, unchecked=False):
         raise RuntimeError(f"ranked --benchmark runs require --profile-steps {prof['profile_start']}-{prof['profile_end']}")
     if start - 2 < wl["num_steps"]:   # slime steps the profiler inside the step timer: setup in START-2, warm-up START-1
         raise RuntimeError(f"--profile-steps {start}-{end}: the profiler's setup step {start - 2} falls inside steps "
-                           f"0-{wl['num_steps'] - 1} (measured window and convergence check); use START >= "
+                           f"0-{wl['num_steps'] - 1} (measured window and correctness check); use START >= "
                            f"{wl['num_steps'] + 2}")
     n_roll = _flag_int(text, "num-rollout")
     if n_roll is None and not unchecked:

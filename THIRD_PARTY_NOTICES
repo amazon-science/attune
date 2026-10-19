@@ -12,7 +12,7 @@ NVIDIA Megatron-Bridge
   License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
   Used in: skill/scripts/correctness/mbridge_convergence.py
   What:    validate_convergence() and its numpy import, vendored verbatim from scripts/performance/utils/evaluate.py,
-           with NVIDIA's Apache-2.0 header (lines 1-13 of the file). Layer 2 of the correctness check calls it
+           with NVIDIA's Apache-2.0 header (lines 1-13 of the file). The correctness check's loss-curve review calls it
            unmodified. Lines 15-19 are a provenance note added here.
 
 ------------------------------------------------------------------------------------------------------------------------

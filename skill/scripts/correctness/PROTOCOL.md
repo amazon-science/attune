@@ -2,8 +2,8 @@
 
 A tuned recipe ships only if it trains the same objective as the baseline. Throughput runs say
 nothing about that, so every recipe that ships, structural or numeric, is compared against its
-baseline in a short paired A/B and must pass both layers below. The skill runs this check as
-the final cascade (`SKILL.md`, "When to stop").
+baseline in a short paired A/B and must pass layer 1 and the step-0 check below. The skill runs this
+check as the final cascade (`SKILL.md`, "When to stop").
 
 ## Pair setup
 
@@ -50,44 +50,78 @@ raises into training; on any internal error it prints `PARITY_PROBE_ERROR` once 
 
 Diff the resolved arguments of the two runs (`layer1.py`). Every changed name is classified by the frozen rule
 lists of the rules dir (`$AUTOTUNE_RULES_DIR`, else `rules/` beside these scripts; formats and an example in
-`rules/README.md`): `numerics_list.yaml` (numeric, placement, packing, allowlisted, derived, ignored) and the
-setup's directory, the one holding the frozen-arguments file (`layer1/<name>/frozen_args.yaml`), with its
-`allowlist.yaml` (the swaps allowed on that setup and their values) and `ct_status.yaml` (its component-test
-results), and the directory of the image both arms ran (`images/<digest prefix>/`, from the pair's `images.json`)
-with the same two files for swaps tested on that image; a setup entry replaces the image's for its argument. Without
-either directory no swap is admitted.
+`rules/README.md`): `numerics_list.yaml` (objective, numeric, placement, packing, allowlisted, derived, ignored) and
+the setup's directory, the one holding the frozen-arguments file (`layer1/<name>/frozen_args.yaml`), with its
+`allowlist.yaml` (the swaps allowed on that setup and their values), `ct_status.yaml` (its component-test results)
+and `defects.yaml` (known stack defects), and the directory of the image both arms ran (`images/<digest prefix>/`,
+from the pair's `images.json`) with the same three files for swaps tested and defects found on that image. A setup
+swap entry replaces the image's for its argument; the defects of both directories apply.
 
-- **Fail** on any change to a numeric name; a name the list does not know is numeric.
-- **Fail** on an allowlisted name that both allowlists omit, that moves to a value outside its list, or whose
-  component test has not passed in the source that lists it. Layer 2 still applies to allowlisted swaps.
-- **Fail** on a derived value (`padded_vocab_size`) that moves to anything the framework would not derive.
-- **Placement and packing** changes never fail layer 1; layer 2 is their guard.
+Each change is refused, accepted or unknown:
+
+- **Refused** (layer 1 fails): a change to an `objective` name (data, sampling, batch, run length, learning-rate and
+  weight-decay schedule, the optimizer and the parameters it trains, loss terms, dropout, precision format, token
+  dropping, routing semantics); a candidate in a known stack defect state the baseline is not in, where the entry's
+  argument takes a listed value and every `when` condition holds on the candidate's resolved arguments, whichever of
+  those arguments changed (the verdict prints the entry's reason and evidence); an allowlisted swap whose component
+  test is recorded `fail` in the setup's or the image's results; a derived value (`padded_vocab_size`, printed as
+  integers) that moves to anything the framework would not derive.
+- **Accepted**: placement, packing and ignored changes; a derived value the framework derives from the other
+  changes; an allowlisted swap that an allowlist lists with both values and whose component test passed in the source
+  that lists it.
+- **Unknown** (layer 1 passes): a change to a `numeric` name or to a name the lists do not know, a name only one of
+  the two dumps has (two builds; an objective-class one is flagged to check by hand), a derived value either dump does
+  not print as an integer (cannot recompute), and an allowlisted swap that no allowlist lists, that moves outside its
+  listed values, or whose component test has not passed. The step-0 check judges these, and the verdict lists each
+  with its reason for human review.
 - **Missing or unreadable dumps and rules** fail layer 1: an empty resolved-argument dump in either log, two dumps
-  that share fewer than 90% of their argument names, or an unreadable `numerics_list.yaml`.
+  that share fewer than 90% of their argument names, an unreadable `numerics_list.yaml` or one with an unknown
+  top-level key or a name in two classes, an `allowlist.yaml`, `ct_status.yaml` or `defects.yaml` that exists but is
+  not a readable file or carries an unknown top-level key, a swap whose values are neither a list nor `any`, and a
+  defect entry without its argument, values, reason or evidence. Allowlist
+  and defect values and component-test statuses are compared after the same normalization as the dump values
+  (case, whitespace, YAML booleans and null).
 - **Frozen arguments.** When `$AUTOTUNE_FROZEN_ARGS` names a frozen-arguments file
   (`frozen_args.py`), layer 1 also fails if either arm's resolved arguments violate it, its couplings
   (`couplings.py`) included, and an unreadable file fails layer 1. The same file is checked before launch
   (`make_run_yaml.py`).
 
-## Layer 2: convergence
+## Step-0 check
 
-The candidate's per-step training loss over steps 0-19 (all 20 present in both arms) is compared with the
-baseline's by NVIDIA Megatron-Bridge's `validate_convergence`, vendored verbatim in `mbridge_convergence.py`, with
-the thresholds Megatron-Bridge's performance pipeline passes:
+Both logs must hold the training loss of all 20 steps (0-19), each finite, and the candidate's step-0 loss must lie
+within 5% of the baseline's: |loss_0(candidate) / loss_0(baseline) - 1| <= 0.05 (`STEP0_TOL` in
+`parity_verdict.py`). Step 0 runs on the same initial weights and the same rows in both runs, so a change that keeps
+the objective moves it only by rounding and reduction order, while a defect in weight loading, sharding or layer
+mapping moves it far. On 40 ablation campaigns this rule accepted all 328 known-valid runs, which moved the step-0 loss
+by at most 1.7%, and would have refused all 19 known defects of that kind, which moved it by +215% to +768%. A missing or
+non-finite loss in either log fails the check. Step 0 sees only what changes the forward pass at initialization: a
+kernel that rounds differently (a fused router that breaks exact BF16 ties differently) or a defect in the gradient or
+optimizer path can pass it, so known defects are refused at layer 1 and the loss curve below is reported for review.
+
+## Loss curve (review)
+
+The verdict also compares the candidate's per-step training loss over steps 0-19 with the baseline's by NVIDIA
+Megatron-Bridge's `validate_convergence`, vendored verbatim in `mbridge_convergence.py`, with the thresholds
+Megatron-Bridge's performance pipeline passes:
 
 - the first 20% of steps are skipped;
 - point-wise relative tolerance 10% / 5% / 2% for loss above 2.0 / 0.5-2.0 / below 0.5, with at most 10% of the
   compared points outside it;
 - final-loss tolerance 5%, correlation at least 0.95, and a 3-sigma outlier check.
 
-The check is tuned to avoid false rejects: it catches gross breakage and can miss subtle faults. The verdict also
-reports, without gating, whether the probe's `rows`, `tokens` and `loss_tokens` are identical at every step (the
-probe counts only chunk 0's `get_batch` calls, so counts are per microbatch and independent of VPP and PP), the
-step-0 loss and grad-norm relative differences, and the 20-step mean loss gap.
+It also reports the candidate's mean relative loss deviation from the baseline over steps 10-19. Both are for human
+review and never decide: on GLM-4.7-Flash, whose loss spikes during its first ten steps, 151 of the 702 ordered pairs
+of its 27 baseline-recipe runs fail the curve check against each other. Each verdict's `review` list holds every
+unknown change of layer 1 (name, from, to, reason), a failed or unscored curve check, and an error in any review-only
+computation, which never changes the verdict. The verdict also reports, without gating, whether the probe's `rows`,
+`tokens` and `loss_tokens` are identical at every step (the probe counts only chunk 0's `get_batch` calls, so counts
+are per microbatch and independent of VPP and PP), the step-0 grad-norm relative difference, and the 20-step mean
+loss gap.
 
 ## Decision rule
 
-- A recipe ships only if it passes layers 1 and 2.
+- A recipe ships only if layer 1 refuses none of its changes and the step-0 check passes. Unknown changes and the
+  loss curve are listed for human review and never refuse a recipe.
 - On failure, test the next-best ranked recipe of the same campaign that is eligible to ship
   (`SKILL.md` Invariants) against the same baseline run. If none passes, ship the baseline.
 - Infrastructure failures (hangs, NCCL init, node loss, image pull) are relaunched and give no
@@ -131,12 +165,15 @@ python3 <this-skill-dir>/scripts/correctness/parity_verdict.py <pair> [--json ve
 python3 <this-skill-dir>/scripts/correctness/parity_verdict.py <root> [--json verdicts.json]  # every pair under <root>
 ```
 
-For each pair it prints PASS or FAIL with the layer-1 and layer-2 results, what tripped layer 1 (errors, numeric
-changes, allowlist, derived and frozen violations), the failed layer-2 metrics, whether the probe counts are
-identical (when the probe ran), the step-0 deltas and the 20-step gap. With `gpus.json`, throughput printed alongside
+For each pair it prints one PASS or FAIL line with the layer-1 result and the step-0 shift, then what tripped layer 1
+(errors, objective changes, known defects, failed component tests, derived and frozen violations) or the step-0
+check, then the review lines (each unknown change with its reason, and the loss-curve result with the steps 10-19
+deviation), whether the probe counts are identical (when the probe ran), the step-0 grad-norm difference and the
+20-step gap. With `gpus.json`, throughput printed alongside
 is tokens over logged step time per GPU on steps 5-19 (probe tokens when the probe ran, else the logged tokens), for
 orientation only. It exits 0 when every pair passes, 1 when any pair fails
 or cannot be scored, and 2 when it finds no pair. Under the launcher it first runs the campaign's integrity check
 (`harness/integrity.py`), which also hashes the dataset again through the log pod; on a violation (a changed or
 missing dataset included) it scores nothing, no recipe ships, and it exits 3. When the log pod cannot be reached it
-scores nothing and exits 4: retry.
+scores nothing and exits 4: retry. A failure to write `--json` is reported on stderr and leaves the exit code as
+scored.

@@ -75,8 +75,9 @@ def stamp(step, step_time, t0="2026-10-01 00:00:00"):
     return "[%s]" % (dt.datetime.fromisoformat(t0) + dt.timedelta(seconds=step * step_time)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def train_log(loss0=2.5, gn0=1.0, steps=20, args=None, counts=True):
-    """Synthetic slime train.log: resolved-argument dump, per-step loss/grad-norm, probe counts and perf lines."""
+def train_log(loss0=2.5, gn0=1.0, steps=20, args=None, counts=True, losses=None):
+    """Synthetic slime train.log: resolved-argument dump, per-step loss/grad-norm, probe counts and perf lines.
+    losses: {step: loss} replacing the default loss0 - 0.01 x step of those steps."""
     a = {"moe_router_load_balancing_type": "aux_loss", "moe_aux_loss_coeff": "0.02", "context_parallel_size": "2",
          "tensor_model_parallel_size": "2", "global_batch_size": "96", "max_tokens_per_gpu": "3072", "micro_batch_size": "2",
          "virtual_pipeline_model_parallel_size": "None"}
@@ -84,7 +85,7 @@ def train_log(loss0=2.5, gn0=1.0, steps=20, args=None, counts=True):
     lines = ["  %s %s %s" % (k, "." * 8, v) for k, v in a.items()]
     for t in range(steps):
         lines.append("%s train.py:1 - step %d: {'train/loss': %r, 'train/grad_norm': %r}"
-                     % (stamp(t, 10.0), t, loss0 - 0.01 * t, gn0))
+                     % (stamp(t, 10.0), t, (losses or {}).get(t, loss0 - 0.01 * t), gn0))
         if counts:
             lines.append("PARITY_COUNTS rollout %d step %d: %s" % (t, t, json.dumps(
                 {"rows": 96, "tokens": 96 * 3072, "loss_tokens": 96 * 3000, "microbatches": 12, "basis": "chunk0"})))

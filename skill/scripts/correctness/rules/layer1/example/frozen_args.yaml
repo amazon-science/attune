@@ -1,5 +1,5 @@
 {
- "_comment": "Example frozen-arguments file (format only; JSON syntax, which YAML also reads). Point AUTOTUNE_FROZEN_ARGS at a file like this one: make_run_yaml.py refuses a run that sets these arguments otherwise, and layer 1 fails a candidate whose resolved arguments violate them. Its directory is the setup's layer-1 directory, where layer 1 reads allowlist.yaml and ct_status.yaml.",
+ "_comment": "Example frozen-arguments file (format only; JSON syntax, which YAML also reads). Point AUTOTUNE_FROZEN_ARGS at a file like this one: make_run_yaml.py refuses a run that sets these arguments otherwise, and layer 1 fails a candidate whose resolved arguments violate them. Its directory is the setup's layer-1 directory, where layer 1 reads allowlist.yaml, ct_status.yaml and defects.yaml.",
  "args": {
   "global_batch_size": {"eq": 128},
   "seq_length": {"eq": 8192},

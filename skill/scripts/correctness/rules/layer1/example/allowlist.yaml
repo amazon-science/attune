@@ -1,6 +1,6 @@
 # Example per-setup allowlist (format only; not a validated list). Layer 1 reads it when the frozen-arguments file
 # beside it is in use ($AUTOTUNE_FROZEN_ARGS). Each swap names an argument of the `allowlisted` class in
-# numerics_list.yaml, the values baseline and candidate may take (lower case; `none` = the flag absent; `any` = every
+# numerics_list.yaml, the values baseline and candidate may take (normalized; `none` = the flag absent; `any` = every
 # value), and the component test that must have passed for this setup (ct_status.yaml beside this file); `none`
 # admits the swap without a test. Write your own after running the component tests on your stack.
 version: 1

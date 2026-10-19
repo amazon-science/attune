@@ -15,7 +15,7 @@
 # Vendored verbatim from NVIDIA Megatron-Bridge, scripts/performance/utils/evaluate.py, commit
 # c3c974d4f2e315db8db01945acab6555049c40d7 (2026-10-05): the licence header above (lines 1-13), the numpy import
 # (lines 26-31) and validate_convergence (lines 145-329), unmodified. Nothing else of that file is used. ATTUNE's
-# correctness layer 2 calls it on a check arm's per-step loss against its baseline arm's, with the
+# correctness check calls it, for review only, on a check arm's per-step loss against its baseline arm's, with the
 # thresholds Megatron-Bridge's pipeline passes (scripts/performance/argument_parser.py:1092-1125).
 import logging
 from typing import Any, Dict, List, Optional

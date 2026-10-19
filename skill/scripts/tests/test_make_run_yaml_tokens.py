@@ -50,6 +50,25 @@ spec:
               resources: {limits: {nvidia.com/gpu: 8}}
 """
 
+# A host-memory preflight python command with its own `2>&1 | tee` before the training command.
+TWO = SCRIPT.replace(
+    "    exec > >(tee -a /shared/alice/train.log) 2>&1\n"
+    "    # --pipeline-model-parallel-size 9 was slower; see notes\n"
+    "    python3 -m trainer --async \\\n",
+    '    python3 /scripts/all_nodes.py 2 "bash /scripts/hostmem_preflight.sh $LOG_DIR --sample" \\\n'
+    '      2>&1 | tee "$LOG_DIR/hostmem_preflight.log"\n'
+    '    python3 /scripts/check_nodes.py --seed 7 2>&1 | tee "$LOG_DIR/check.log"\n'
+    '    MODEL_ARGS_LINE="$(python3 tools/model_args.py my-model-full)"\n'
+    "    python3 train.py \\\n").replace(
+    "      --seed 1234\n    echo done",
+    '      --seed 1234 \\\n      2>&1 | tee "$LOG_DIR/train.log"\n    echo done')
+
+
+def commands(text):
+    """{program of each python3 command: its joined text} of the run.sh commands."""
+    _, cmds = mry._commands(text)
+    return {j.split("python3 ", 1)[1].split()[0]: j for _, _, j in cmds if j.lstrip().startswith("python3 ")}
+
 
 def flags(text):
     return {k: v for k, v in frozen_args.manifest_flags(frozen_args.strip_comments(text)).items()}
@@ -325,3 +344,44 @@ def test_rollout_adapter_honours_seq_len(monkeypatch):
     assert len(adapter.generate_rollout(args, 0, buffer(8192))[0][0].tokens) == 8192
     with pytest.raises(ValueError, match="disable-rollout-global-dataset"):
         adapter.generate_rollout(types.SimpleNamespace(rollout_batch_size=2, rollout_global_dataset=False), 0, buffer(16))
+
+
+def test_flags_go_on_the_training_command_not_a_preflight(tmp_path):
+    before = commands(TWO)
+    assert set(before) == {"/scripts/all_nodes.py", "/scripts/check_nodes.py", "train.py"}
+    out = mry.apply_add(TWO, "overlap-grad-reduce", "")
+    out = mry.apply_set(out, "num-rollout", "14")                   # absent: appended to the training command
+    out = mry.apply_set(out, "tensor-model-parallel-size", "6")    # present: edited in place
+    out = mry.apply_set(out, "seed", "5")                          # the helper's own --seed is not touched
+    out = mry.apply_unset(out, "hf-checkpoint")
+    after = commands(out)
+    assert after["/scripts/all_nodes.py"] == before["/scripts/all_nodes.py"]
+    assert after["/scripts/check_nodes.py"] == before["/scripts/check_nodes.py"]
+    train = after["train.py"]
+    assert "--overlap-grad-reduce" in train and "--num-rollout 14" in train and "--seed 5" in train
+    assert "--tensor-model-parallel-size 6" in train and "--hf-checkpoint" not in train
+    assert train.rstrip().endswith('2>&1 | tee "$LOG_DIR/train.log"')
+    p, rendered = make(tmp_path, TWO, "alice-tune-prof", "--benchmark", "--with-profiler", "--profile-ranks", "all",
+                       "--add", "overlap-param-gather=")
+    assert p.returncode == 0, p.stderr
+    after = commands(rendered)
+    assert after["/scripts/all_nodes.py"] == before["/scripts/all_nodes.py"]
+    assert after["/scripts/check_nodes.py"] == before["/scripts/check_nodes.py"]
+    for f in mry.PROFILER_FLAGS + ("tensorboard-dir", "overlap-param-gather", "num-rollout", "global-batch-size"):
+        assert "--" + f in after["train.py"], f
+
+
+@pytest.mark.parametrize("edit, error", [
+    (lambda t: t.replace("python3 /scripts/check_nodes.py --seed 7", "python3 train.py --seed 7"), "found 2"),
+    (lambda t: t.replace("python3 train.py", "python3 run.py").replace("--micro-batch-size=1", "--foo=1")
+     .replace("--tensor-model-parallel-size 3 --pipeline-model-parallel-size 5 ", ""), "found 0"),
+])
+def test_no_single_training_command_is_an_error(edit, error):
+    with pytest.raises(RuntimeError, match="cannot identify the single training command.*" + error):
+        mry.apply_add(edit(TWO), "overlap-grad-reduce", "")
+
+
+def test_a_training_command_in_a_quoted_yaml_string_is_refused():
+    quoted = 'data:\n  run.sh: "python3 train.py --seed 1 2>&1 | tee x.log\\necho done"\n'
+    with pytest.raises(RuntimeError, match="inside a quoted YAML string"):
+        mry.apply_add(quoted, "overlap-grad-reduce", "")

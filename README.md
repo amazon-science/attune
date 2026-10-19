@@ -29,9 +29,12 @@ On four models held out from its development, each starting from the strongest p
   it extends as a campaign learns.
 - **Measurement.** Every candidate runs the same fixed-shape workload for 20 steps, scored on steps 5 to 19, and
   replaces the leader only if it beats it by more than the noise band.
-- **Correctness.** A configuration check classes every changed argument as numeric, placement or an allowlisted
-  same-math swap; a 20-step convergence check compares the candidate's loss with the baseline's using Megatron-Bridge's
-  `validate_convergence` thresholds. `skill/scripts/correctness/PROTOCOL.md` has the rules.
+- **Correctness.** A configuration check refuses changes to the training objective (data, batch, schedule, optimizer,
+  loss, precision, token dropping, routing), known stack defects and same-math swaps whose component test failed,
+  accepts layout, packing and tested same-math swaps, and lists every other change for human review. A paired
+  20-step run then requires finite losses and the candidate's step-0 loss within 5% of the baseline's;
+  Megatron-Bridge's `validate_convergence` on the loss curve is reported for review.
+  `skill/scripts/correctness/PROTOCOL.md` has the rules.
 - **Autonomy.** A Stop hook keeps the agent working until the budget is spent or it records a stop with evidence,
   and a ledger lets a crashed session resume. The launcher gives each campaign read-only copies of the skill and
   harness and records the hashes of the files a campaign must keep: the scoring, measurement and correctness tools,
@@ -53,8 +56,8 @@ row-building tools in `skill/scripts/data/` also need pyarrow and transformers.
 3. Prepare a working, untuned baseline recipe (`ATTUNE_BASELINE_YAML`), rows packed to the workload length
    (`skill/scripts/data/` builds and checks them), and a pod that mounts the shared volume read-only to read run logs
    (`AUTOTUNE_LOG_POD`; `skill/references/measurement.md` §1).
-4. Class your stack's arguments in `skill/scripts/correctness/rules/numerics_list.yaml`; unlisted arguments count as
-   numeric. `rules/README.md` documents the formats.
+4. Class your stack's arguments in `skill/scripts/correctness/rules/numerics_list.yaml`; an unlisted argument is
+   unknown, so layer 1 passes it and lists it for review. `rules/README.md` documents the formats.
 5. Launch: `harness/launch_campaign.sh <campaign_dir> [goal_prompt.txt]`, with `AUTOTUNE_GPUH_BUDGET` (GPU-hours) or
    `AUTOTUNE_BUDGET` (ranked runs). Rerun with `--session <id>` to resume; the campaign keeps the settings it started
    with. Edit `goal_prompt.txt` and `resume_prompt.txt` in the campaign directory only between sessions, before a

@@ -12,7 +12,7 @@ The control directory, <campaign_dir>/.attune, belongs to launch_campaign.sh: it
 skill and the harness, the campaign's config.env and this module's record, integrity.json. The record holds the
 SHA-256 of every protected file: both copies (the scoring, measurement and correctness tools and rules among them),
 config.env, the goal and resume prompts, the rendered .claude/settings.json, and the rules directory,
-frozen-arguments file (with its allowlist and component-test files) and calibration file that config.env names
+frozen-arguments file (with its allowlist, component-test and defect files) and calibration file that config.env names
 outside the copies. For the append-only files (every <campaign_dir>/*/AUTOTUNE_LEDGER.jsonl, $AUTOTUNE_LEDGER, the
 GPU-hour log and the skill copy's references/levers.md) it holds the length and hash of the content seen so far. It
 also holds the dataset's rows_sha256 (and file sha256), read through the log pod at launch.
@@ -124,7 +124,8 @@ def _external(cfg):
     frozen = cfg.get("AUTOTUNE_FROZEN_ARGS")
     if frozen:
         setup = os.path.dirname(os.path.realpath(frozen))
-        out += [os.path.realpath(frozen)] + [os.path.join(setup, n) for n in ("allowlist.yaml", "ct_status.yaml")]
+        out += [os.path.realpath(frozen)] + [os.path.join(setup, n)
+                                             for n in ("allowlist.yaml", "ct_status.yaml", "defects.yaml")]
     if cfg.get("AUTOTUNE_CALIBRATION"):
         out.append(os.path.realpath(cfg["AUTOTUNE_CALIBRATION"]))
     return [f for f in out if os.path.isfile(f)]

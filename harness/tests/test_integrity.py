@@ -163,6 +163,29 @@ def test_files_named_outside_the_copies(campaign):
         str(calib), str(rules / "layer1" / "setup" / "allowlist.yaml")}
 
 
+def test_setup_rule_files_beside_an_outside_frozen_args_file(campaign):
+    setup = campaign.tmp / "setup"
+    setup.mkdir()
+    for name, text in (("frozen_args.yaml", "args: {}\n"), ("allowlist.yaml", "{}\n"), ("ct_status.yaml", "{}\n"),
+                       ("defects.yaml", "defects: []\n")):
+        (setup / name).write_text(text)
+    control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root),
+                                            "AUTOTUNE_FROZEN_ARGS": str(setup / "frozen_args.yaml")})
+    assert integrity.check(str(control)) == []
+    (setup / "defects.yaml").write_text("defects: []\n# emptied\n")
+    assert [p["path"] for p in integrity.check(str(control))] == [str(setup / "defects.yaml")]
+
+
+def test_rule_files_inside_the_skill_copy_are_protected(campaign):
+    skill = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "skill")
+    control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root)}, skill=skill)
+    assert integrity.check(str(control)) == []
+    path = control / "skill" / "scripts" / "correctness" / "rules" / "layer1" / "example" / "ct_status.yaml"
+    os.chmod(path, 0o644)
+    path.write_text("tests: {}\n")
+    assert [p["path"] for p in integrity.check(str(control))] == [str(path)]
+
+
 def test_a_later_launch_allows_the_operators_prompt_edits(sealed):
     (sealed.root / "resume_prompt.txt").write_text("The cluster was down for an hour.\n")
     assert integrity.check(str(sealed.control), relaunch=True) == []

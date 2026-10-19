@@ -197,8 +197,8 @@ L5. Goto L1.
 - **Profiling is per launch, not a gate.** A completed run is rankable with or without a trace. When you asked
   for one (`--with-profiler`) and it is missing at `<tensorboard-dir>/*.pt.trace.json.gz`, say so in
   `profile_reason` and decide whether to relaunch with it; do not discard a valid measurement over a trace.
-- **Objective-preserving only — a lever is objective-CHANGING until PROVEN otherwise.** Never trust a
-  flag as safe from memory (e.g. `--grad-reduce-in-bf16` also force-sets
+- **Objective-preserving only.** Never trust a flag as safe from memory: read its resolved behavior in the
+  running image's source before you use it (e.g. `--grad-reduce-in-bf16` also force-sets
   `accumulate_allreduce_grads_in_fp32=False`, see `levers.md`).
   - *Structural (placement/scheduling only, no dtype/value change):* parallelism degrees
     (TP/PP/EP/ETP/CP/DP), `sequence-parallel`, dtype-preserving data-parallel comm overlap,
@@ -208,20 +208,27 @@ L5. Goto L1.
     regrouping rows shifts that term slightly, as TP/DP/PP changes shift reduction order and rounding,
     and the final correctness check (below) is what accepts or rejects the recipe. Structural does not
     mean exempt: every shipped recipe passes that check.
-  - *Same-math swaps (ship only where the campaign's allowlist lists them):* a fusion, a kernel or
-    dispatcher implementation, optimizer CPU offload, or any other different implementation of the same
-    function. Correctness layer 1 admits one only where the setup's allowlist lists that argument and value,
-    which happens only after the swap passed its component test. The allowlist is the `allowlist.yaml` beside
+  - *Same-math swaps:* a fusion, a kernel or dispatcher implementation, optimizer CPU offload, or any other
+    different implementation of the same function. Correctness layer 1 accepts one where the setup's allowlist
+    lists that argument and value and its component test passed. The allowlist is the `allowlist.yaml` beside
     the frozen-arguments file `$AUTOTUNE_FROZEN_ARGS` (by convention `rules/layer1/<setup>/`,
     `scripts/correctness/rules/README.md`), plus `rules/images/<digest prefix>/allowlist.yaml` for swaps
     tested on the image, which apply to every model on it when the pair's `images.json` (written by
-    `pair_from_runs.py`) names that image, pinned by digest, for both runs. Every other swap is numeric by default and fails layer 1. Read both allowlists before
-    you propose one.
-  - *Numeric (different math or lower precision → never shipped):* anything changing the dtype/value of
-    gradients, optimizer state, accumulation, precision (FP8), loss, expert routing/capacity,
-    `global-batch-size`/`rollout-batch-size`, or LR/optimizer. Layer 1 fails a candidate that carries one,
-    whatever the other layers show. You may measure one to learn from it; report it apart from the shipped
-    recipe, and never call a change "training-neutral" without a recorded PASS.
+    `pair_from_runs.py`) names that image, pinned by digest, for both runs. Layer 1 refuses a swap whose
+    component test failed in either directory or that puts the candidate in a known stack defect state
+    (`defects.yaml` beside either allowlist); any other swap is unknown: it passes layer 1, the step-0 check
+    decides, and the verdict lists it for human review. Read the allowlists and defect lists before you
+    propose one.
+  - *Objective changes and known defects (never shipped):* a change to an argument of the `objective` class of
+    `numerics_list.yaml` (data and sampling, `global-batch-size`/`rollout-batch-size`, run length, LR and
+    weight-decay schedule, the optimizer and the parameters it trains, loss terms, dropout, precision format and
+    the dtypes of params, gradients, optimizer state and accumulation, token dropping and routing semantics), and
+    a recipe that puts the candidate in a known stack defect state. Layer 1 refuses these whatever the step-0
+    check shows. You may measure one to learn from it; report it apart from the shipped recipe.
+  - *Unknown (any other numeric-class or unlisted flag):* allowed. Layer 1 passes it as unknown, the step-0
+    check decides, and the verdict lists it for human review. Read its source first and confirm it preserves the
+    math (`verified_from_source`): the step-0 check sees only the forward pass at initialization, so a gradient-
+    or optimizer-path change can pass it. Never call a change "training-neutral" without a recorded PASS.
 - **Concurrency cap: 3 running RayJobs** (the baseline counts). Overflow → `QUEUE.md`. If a scheduler
   (e.g. Kueue) admits fewer, let it gate.
 
@@ -359,7 +366,8 @@ fixed cap, not a target to spend:
   cap or a STOP row.
 
 **Before declaring the goal complete — final correctness check (cascade).** Test the leaderboard
-top-down with the correctness check (`scripts/correctness/PROTOCOL.md`), on runs you already have: the baseline's
+top-down with the correctness check (`scripts/correctness/PROTOCOL.md`), every ranked recipe whatever its
+`objective_class`, on runs you already have: the baseline's
 unprofiled benchmark run is the reference side and the candidate's own unprofiled benchmark run is the candidate side
 (same data, seed, benchmark GBS, image and `--num-rollout`, scored on steps 0-19). Copy both `train.log`s off the log
 pod, make the pair with `scripts/correctness/pair_from_runs.py --base-log <log> --base-yaml <yaml> --win-log <log>
@@ -371,15 +379,19 @@ dataset included) and no recipe ships.
 A candidate whose ranked run was profiled first gets its confirm run
 (Verdict §). Probe arms (`scripts/correctness/make_parity_arm.py`) are for diagnosing a failing pair, not for the
 verdict.
-Layer 1: resolved-argument diff with no numeric change (by the frozen rule lists,
-`scripts/correctness/PROTOCOL.md`) and no frozen-argument violation.
-Layer 2: the candidate's per-step training loss over the 20 steps against the baseline's, by Megatron-Bridge's
-convergence check (`scripts/correctness/mbridge_convergence.py`, with the fixed thresholds of
-`scripts/correctness/PROTOCOL.md`); the step-0 loss and grad-norm differences are reported beside it (and the probe's
-per-step counts when the runs carry the probe).
-**Pass** (layers 1 and 2)
-→ that recipe is the shipped winner; set `parity_checked:true`. **Fail** → mark it `parity_failed`
-with the failing layer, drop it, and test the next-best ranked recipe against the same baseline run;
+Layer 1: resolved-argument diff by the frozen rule lists (`scripts/correctness/PROTOCOL.md`). It refuses a change to
+an objective argument, a candidate in a known stack defect state the baseline is not in, a swap whose component test
+failed, and any frozen-argument violation; every other numeric, unclassified or untested change passes it as unknown.
+Step-0 check: both runs log all 20 training losses, each finite, and the candidate's step-0 loss is within 5% of the
+baseline's. These two alone decide the verdict.
+For review only, never deciding: each unknown change with its reason, Megatron-Bridge's loss-curve check
+(`scripts/correctness/mbridge_convergence.py`, with the fixed thresholds of `scripts/correctness/PROTOCOL.md`) and the
+steps 10-19 loss deviation, and the step-0 grad-norm difference (and the probe's per-step counts when the runs carry
+the probe).
+**Pass** (layer 1 and the step-0 check)
+→ that recipe is the shipped winner; set `parity_checked:true` and copy the verdict's review lines beside it in
+`RESULTS.md` for the human review. **Fail** → mark it `parity_failed`
+with the failing check, drop it, and test the next-best ranked recipe against the same baseline run;
 repeat until one passes. If **none** pass, ship the baseline and report "no promotable winner". This
 applies to structural leaders too (TP/PP/EP/CP changes alter reduction order), so no recipe is
 declared the winner without a recorded PASS. If capacity blocks a needed unprofiled run, queue it and wait: an unrun
@@ -419,10 +431,11 @@ their generalizable rules into `levers.md` instead (`past_tuning_projects/README
     and in those structural env vars. Keep other env vars (Transformer Engine `NVTE_*` backend selectors, TF32 and
     determinism switches, anything unclassified), script lines, modules, other pod-template or object changes (pod
     affinity included), data, checkpoint, seed and batch flags as the baseline has them, put no shell syntax in a
-    flag token, and do not set flags the layer-1 rules call numeric or unknown. Layer 1 compares resolved arguments,
-    not the environment: env vars a frozen-arguments file freezes are checked before launch (`make_run_yaml.py`),
-    and the rest rely on this rule. Edit a baseline only to set up a new workload (env vars in the pod `env:` blocks, not
-    `export`, or Ray actors don't see them; image pinned by digest).
+    flag token, and do not set flags layer 1 refuses (the `objective` class, known stack defects and swaps whose
+    component test failed). Layer 1
+    compares resolved arguments, not the environment: env vars a frozen-arguments file freezes are checked before
+    launch (`make_run_yaml.py`), and the rest rely on this rule. Edit a baseline only to set up a new workload (env
+    vars in the pod `env:` blocks, not `export`, or Ray actors don't see them; image pinned by digest).
   - **What scores a run.** A run is scored from its job's train.log over the frozen window, so tear down a running
     job only to abort it: a run torn down early is scored only if its log holds a complete window.
   - **`--benchmark` does NOT enable the profiler** (fixed-shape contract only): a benchmark run is unprofiled
@@ -517,9 +530,9 @@ Listed in the order you use them in a cycle — what each does and when to call 
   category to a lever via `levers.md` §c + `measurement.md` §6; it does not recommend flags.
 - **`correctness/pair_from_runs.py --base-log <log> --base-yaml <yaml> --win-log <log> --win-yaml <yaml> --pair <dir>`** and
   **`correctness/parity_verdict.py <pair_dir>`** — make a correctness-check pair from two finished unprofiled
-  benchmark runs and score it on layers 1 and 2. Call at the final cascade (When to stop); protocol in
-  `scripts/correctness/PROTOCOL.md`. **`correctness/make_parity_arm.py`** makes a 20-step probe arm (count probe on
-  every pod) when a failing pair needs diagnosing.
+  benchmark runs and score it (layer 1 and the step-0 check, with the review list). Call at the final cascade
+  (When to stop); protocol in `scripts/correctness/PROTOCOL.md`. **`correctness/make_parity_arm.py`** makes a
+  20-step probe arm (count probe on every pod) when a failing pair needs diagnosing.
 - **`calibration.py [--require]`** — the band b and the baseline denominator from `$AUTOTUNE_CALIBRATION`
   (Verdict §; the file is optional, and is refused unless its `num_steps` and `window` stamps match the campaign's
   workload); call it once before the first verdict. `calibration.py build` writes a stamped file from >= 5 baseline

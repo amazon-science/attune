@@ -12,12 +12,13 @@ qualitative on purpose. The evidence behind a rule lives in a campaign's own `RE
 > loss) are structural, and they still ship only through the final correctness check. cpu-offload is
 > placement, but toggling it swaps the CPU optimizer for the fused GPU optimizer, so a small
 > systematic loss offset is possible; the check decides. Kernel/backend swaps are NOT safe by
-> construction (see `--attention-backend fused`, §d). Anything touching gradient/optimizer/precision/
-> loss/routing/batch **numerics** — including `grad-reduce-in-bf16`, FP8, `global-batch-size`,
-> capacity-factor, aux-loss — may ship ONLY after you (a) read its RESOLVED behavior in the running
-> image's `arguments.py`/source (flags override each other and flip defaults across versions) and
-> (b) pass the final correctness check (`scripts/correctness/PROTOCOL.md`). A passing loss check is necessary, not
-> sufficient: `grad-reduce-in-bf16` can pass a loss A/B at rerun noise while disabling fp32 gradient
+> construction (see `--attention-backend fused`, §d). Changes to the objective — `grad-reduce-in-bf16`, FP8,
+> `global-batch-size`, capacity factor, aux-loss and the rest of the `objective` class of
+> `scripts/correctness/rules/numerics_list.yaml` — never ship: layer 1 refuses them. Any other change touching
+> gradient/optimizer/precision/loss/routing/batch **numerics** may ship ONLY after you (a) read its RESOLVED
+> behavior in the running image's `arguments.py`/source (flags override each other and flip defaults across
+> versions) and (b) pass the final correctness check (`scripts/correctness/PROTOCOL.md`). A passing loss check is
+> necessary, not sufficient: `grad-reduce-in-bf16` can pass a loss A/B at rerun noise while disabling fp32 gradient
 > accumulation in source, so it stays excluded on source grounds. Throughput guidance here says
 > nothing about training quality.
 >
@@ -237,7 +238,7 @@ per-stage free memory, the step-time split) are often as decisive as a trace.
 | Profile signal | Bottleneck class | Where to go |
 |---|---|---|
 | NCCL >50%, AllGather-dominated | comm-bound (param gather) | overlap-param-gather / reduce DP |
-| NCCL >50%, ReduceScatter/AllReduce-dominated | comm-bound (grad reduce) | overlap-grad-reduce (structural); grad-reduce-in-bf16 is numeric and excluded (§d) |
+| NCCL >50%, ReduceScatter/AllReduce-dominated | comm-bound (grad reduce) | overlap-grad-reduce (structural); grad-reduce-in-bf16 is objective-class and refused (§d) |
 | NCCL >50%, SendRecv-dominated | comm-bound (PP or EP alltoall) | topology: reduce PP / verify EP intranode |
 | PP>1 and GPU idle ≥~10% | possibly bubble-bound (PP schedule / stragglers) | first compare the idle to the analytical bubble (below) and look for a straggler stage (next row); if neither explains it, topology: PP↓, or vpp (if the microbatch-alignment rule in §d allows); bs↑ only if bs is unconstrained |
 | PP>1 and one stage is the critical stage: its work time clearly above the other stages', which spend that difference waiting on PP p2p (analyzer `critical stage` and per-stage work / p2p-wait lines), with no allocator stall on it | stage compute imbalance (often the last stage, which also runs the output layer and loss; this is not the schedule bubble) | uneven split moving layers off the critical stage onto stages with slack; see "Uneven pipeline splits" (Tier topology) |
@@ -628,7 +629,7 @@ percent where HBM headroom existed, and OOMs or thrashes once mbs or mt sits at 
 
 No fixed order: which of these matters depends on which collective dominates the profile.
 
-**`--grad-reduce-in-bf16` — OBJECTIVE-CHANGING (numeric). Excluded from shipped recipes, even after
+**`--grad-reduce-in-bf16` — OBJECTIVE-CHANGING. Excluded from shipped recipes, even after
 a passing loss check.** It halves DP grad-reduce volume, so it helps only where DP
 ReduceScatter/AllReduce is a meaningful share of the step; where grad-reduce is small, the bf16
 conversion overhead can net negative. It was a large lever on variable-length data at small GBS
@@ -729,12 +730,12 @@ share of step time its kernel category takes (a lever cannot remove more than th
 - CUDA graphs (`--cuda-graph-scope attn`, `--cuda-graph-impl transformer_engine`) — small when it
   works. Attention-scope and whole-layer capture both ran and tied on an MoE whose step was half
   fine-grained idle (the idle was dependency stall, not CPU launch latency); the MoE scope needs
-  drop-padding (capacity-bounded, token-dropping, numeric) routing, and the legacy graph flag with EP asserts
+  drop-padding (capacity-bounded, token-dropping, objective-changing) routing, and the legacy graph flag with EP asserts
   on expert padding; recompute constraints in `failure_triage.md`.
-- **`--attention-backend fused` (cuDNN) — treat as NUMERIC; keep `flash` in shipped recipes.** It has
+- **`--attention-backend fused` (cuDNN) — numeric: it may ship, and the verdict lists it for review.** It has
   produced NaN grads on low-GQA + softmax-in-fp32, and where it ran cleanly and faster, its loss drifted
-  upward late in the run, beyond rerun noise. The 20-step final check cannot see a late drift, so a single
-  passing A/B is not evidence; ship it only with longer-horizon loss evidence of no drift.
+  upward late in the run, beyond rerun noise. The 20-step check cannot see a late drift: cite this evidence
+  in the review, and confirm with a longer loss run before production training.
 - **Plausible, not yet measured:** an uneven split stacked on a TP1 leader; a hand pipeline layout whose
   stage and chunk boundaries satisfy a cross-layer constraint (DSA index-share), which would unlock vpp and
   EP comm overlap there; `--overlap-moe-expert-parallel-comm` with vpp on a model without such constraints;
@@ -760,7 +761,7 @@ Objective-CHANGING for training math — needs user sign-off on convergence befo
 removing it from a recipe that has it has regressed clearly. Requires `--use-distributed-optimizer`.
 
 **bf16 Adam state** (`--exp-avg-dtype bf16 --exp-avg-sq-dtype bf16`): mostly memory-saving;
-throughput-neutral unless memory-bound. Numeric — excluded unless it passes the final check. It has
+throughput-neutral unless memory-bound. Objective class — layer 1 refuses it. It has
 also OOMed on a temporary fp32 upcast of the state and wedged one run late in its window, so it is not
 a reliable memory saver either.
 
@@ -770,11 +771,11 @@ GShard papers — a starting point), `--moe-router-z-loss-coeff` (~1e-3). Log pe
 50-100 steps; <~1.5× mean is a common heuristic target.
 
 **Expert capacity factor / token drop** (`--moe-expert-capacity-factor` + `--moe-token-drop-policy`)
-— NUMERIC, EXCLUDE from the shipped recipe. Bounding expert-FFN compute gives a real throughput gain
+— OBJECTIVE, refused by layer 1. Bounding expert-FFN compute gives a real throughput gain
 (roughly a tenth at cap ≈ 1.0, more at lower caps), and the drop *policy* (probs vs position) is
 throughput-neutral; the bound is what pays, and the gain saturates above cap ≈ 1.0. It drops tokens:
 at cap 1.0 it has failed a loss-parity check by two orders of magnitude over rerun noise, one-sided.
-Verify its token-dropping behavior in source; report it as a separate numeric win, never in the
+Verify its token-dropping behavior in source; report it as a separate objective-changing win, never in the
 headline.
 
 ### Tier: optimizer / memory relief

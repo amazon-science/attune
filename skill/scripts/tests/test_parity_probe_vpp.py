@@ -122,7 +122,7 @@ C = {"rows": 48, "tokens": 48 * 3072, "loss_tokens": 48 * 3000, "microbatches": 
 def test_verdict_vp6_vs_vp3_per_microbatch(tmp_path):
     r = _pair(tmp_path, dict(C, basis="chunk0"), dict(C, basis="chunk0"),
               {"virtual_pipeline_model_parallel_size": "6"}, {"virtual_pipeline_model_parallel_size": "3"})
-    assert r["counts_identical"] and r["L2"], r
+    assert r["counts_identical"] and r["PASS"], r
 
 
 def test_miles_layout_counts(tmp_path):

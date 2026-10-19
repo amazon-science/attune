@@ -151,10 +151,10 @@ fixed across the sweep; consistency matters more than optimizing each comparison
 - A fresh run_id? A run that resumes from a stale `<run_id>/checkpoints/` skips steps silently (§7).
 
 **Correctness check.** Throughput says nothing about whether a recipe still trains the same model. Every shipped
-recipe passes the two-layer correctness check (configuration, then 20-step convergence) run as the final cascade
-(SKILL.md "When to stop"). `scripts/correctness/PROTOCOL.md` is the authoritative protocol: pair setup, the
-`pair_from_runs.py` and `parity_verdict.py` commands (and `make_parity_arm.py` for diagnostic arms), the
-thresholds, and how to validate the check on a new setup.
+recipe passes the correctness check (layer 1 on the configuration, then the step-0 loss check of a 20-step pair; the
+loss curve is reported for review) run as the final cascade (SKILL.md "When to stop"). `scripts/correctness/PROTOCOL.md`
+is the authoritative protocol: pair setup, the `pair_from_runs.py` and `parity_verdict.py` commands (and
+`make_parity_arm.py` for diagnostic arms), the thresholds, and how to validate the check on a new setup.
 
 ## 5. Compile-tail vs rollout-stall (canonical diagnosis)
 
