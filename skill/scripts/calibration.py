@@ -13,8 +13,9 @@ The file (JSON) holds `denominator` = mean tokens/s/GPU of >= 5 baseline replica
 `sigma_alloc` (their sample standard deviation), `band` = max(0.03, 3 sigma_alloc / denominator), `runs`: the
 replicate count, or the list of replicates, each with the `nodes` it ran on (the allocations must then be distinct),
 and the stamps `num_steps` and `window` [start, end] of the measurement the replicates used, which must equal the
-campaign's workload (workload.py: 20 steps, window [5, 19] by default). Without $AUTOTUNE_CALIBRATION the band is 0.03
-and there is no denominator.
+campaign's workload (workload.py: 20 steps, window [5, 19] by default). Without $AUTOTUNE_CALIBRATION the band is
+$AUTOTUNE_BAND, a fraction strictly between 0 and 1 used as given (default 0.03), and there is no denominator; a
+calibration file's band, never below 0.03, replaces it.
 
 `build` scores each replicate's log with read_metrics.sh over the campaign's window and writes a stamped file; it
 writes nothing unless the result is usable. `stamp` adds the stamps to a file written before they existed: give the
@@ -33,6 +34,8 @@ from pathlib import Path
 import workload
 
 ENV = "AUTOTUNE_CALIBRATION"
+BAND_ENV = "AUTOTUNE_BAND"
+DEFAULT_BAND = 0.03
 HERE = Path(__file__).resolve().parent
 RULE = "denominator = mean of >= 5 baseline replicates on distinct allocations; band = max(0.03, 3 sigma_alloc / denominator)"
 
@@ -63,6 +66,20 @@ def problems(d, wl=None):
                      "with `calibration.py build` from replicates measured under this workload"
                      % (d.get("num_steps"), d.get("window"), want[0], want[1]))
     return p
+
+
+def default_band():
+    """The band without a calibration file: $AUTOTUNE_BAND, else 0.03; exit 1 on a value outside (0, 1)."""
+    raw = os.environ.get(BAND_ENV, "").strip()
+    if not raw:
+        return DEFAULT_BAND
+    try:
+        b = float(raw)
+    except ValueError:
+        b = None
+    if b is None or not 0 < b < 1:
+        sys.exit("calibration: %s=%r is not a fraction strictly between 0 and 1 (0.05 is a 5%% band)" % (BAND_ENV, raw))
+    return b
 
 
 def _workload():
@@ -126,11 +143,15 @@ def stamp(a):
 
 def show(a):
     path = os.environ.get(ENV, "").strip()
+    band, operator_set = default_band(), bool(os.environ.get(BAND_ENV, "").strip())
     if not path:
         if a.require:
             sys.exit("calibration: $%s is not set (--require)" % ENV)
-        print(json.dumps({"band": 0.03, "denominator": None, "source": "default (no calibration file)"}))
+        source = "%s (no calibration file)" % (BAND_ENV if operator_set else "default")
+        print(json.dumps({"band": band, "denominator": None, "source": source}))
         return 0
+    if operator_set:
+        print("note: the calibration file's band applies; %s=%g is not used" % (BAND_ENV, band), file=sys.stderr)
     try:
         with open(path) as f:
             d = json.load(f)

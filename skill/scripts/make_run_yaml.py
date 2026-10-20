@@ -5,7 +5,7 @@
 
     make_run_yaml.py --base <base_yaml> --run-id <run_id> --out <output_yaml> \\
         [--set FLAG=VALUE ...] [--unset FLAG ...] [--add FLAG=VALUE ...] [--env NAME=VALUE ...] \\
-        [--benchmark] [--with-profiler]
+        [--benchmark [--confirm]] [--with-profiler]
 
 What it changes:
   1. The run id. The base run id is the RayJob's metadata.name; every occurrence (K8s names, labels, paths) becomes
@@ -13,9 +13,9 @@ What it changes:
   2. Ownership. The new run id must match ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$, be at most 47 characters and start with
      $ATTUNE_RUN_PREFIX (default "$AUTOTUNE_USER-"). The RayJob and every ConfigMap get the label
      <$AUTOTUNE_OWNER_LABEL, default owner>=<$AUTOTUNE_USER>, which teardown_run.sh checks before it deletes.
-  3. Training flags (--set/--unset/--add) on the `--flag value` words of the embedded shell command, the fixed-shape
+  3. Training flags (--set/--unset/--add) on the `--flag value` words of the embedded shell command, the workload
      contract of --benchmark (workload.py), and the profiler flags of --with-profiler. A --benchmark run is
-     unprofiled unless --with-profiler is given.
+     unprofiled unless --with-profiler is given; --confirm renders a confirm run, a side of the correctness check.
   4. The hook chain (hook_chain.py) on every --benchmark or profiled run: the registry's default hooks, plus
      profile_rank when the run is profiled per stage; --benchmark removes parity_probe from $ATTUNE_HOOKS and
      writes AUTOTUNE_SEQ_LEN into the pod env.
@@ -77,18 +77,22 @@ def parse_args(argv=None):
                          "22-23), traces in $AUTOTUNE_EXPERIMENTS_DIR (default /shared/experiments)/<run_id>/profiles; "
                          "needs an image whose slime or miles has profiler support")
     ap.add_argument("--benchmark", action="store_true",
-                    help="apply the fixed-shape ranking contract of workload.py: GBS and RBS $AUTOTUNE_GBS (default "
+                    help="apply the ranking workload contract of workload.py: GBS and RBS $AUTOTUNE_GBS (default "
                          "128); --num-rollout $AUTOTUNE_NUM_STEPS (default 20: steps 0-4 warm-up, 5-19 measured), or, with "
                          "--with-profiler, the same window then the profiler's setup step 20, warm-up step 21 and "
                          "--profile-capture recorded steps (default 1: step 22, so 23 steps); --prompt-data $AUTOTUNE_DATASET when set (read through "
                          "slime's global dataset, so a --disable-rollout-global-dataset is removed); AUTOTUNE_SEQ_LEN "
                          "(default 8192) in every pod's env for the rollout adapter. Profiler flags the baseline "
                          "carries are removed unless --with-profiler is given")
+    ap.add_argument("--confirm", action="store_true",
+                    help="with --benchmark, render a confirm run: unprofiled, --num-rollout max($AUTOTUNE_NUM_STEPS, "
+                         "20), so it holds the 20 steps the correctness check scores (SKILL.md, Verdict); the same as "
+                         "a plain --benchmark render when $AUTOTUNE_NUM_STEPS is at least 20")
     ap.add_argument("--profile-steps", default=None, metavar="START-END",
                     help="end-exclusive profile range for unranked diagnostics (default 22-23 with the default step "
                          "counts). slime's profiler setup lands in step START-2, so START-2 must come after the "
-                         "$AUTOTUNE_NUM_STEPS steps of the measured window and the correctness check, and END may not "
-                         "exceed --num-rollout; ranked --benchmark runs require the range --profile-capture implies")
+                         "$AUTOTUNE_NUM_STEPS steps of the measured run, and END may not exceed --num-rollout; ranked "
+                         "--benchmark runs require the range --profile-capture implies")
     ap.add_argument("--profile-capture", type=int, choices=(1, 2, 3), default=None,
                     help="recorded profiler steps of a profiled run after its setup and warm-up steps (default "
                          "$AUTOTUNE_PROFILE_CAPTURE, else 1); ask for 2-3 when the step-time CV is high or something "
@@ -425,13 +429,18 @@ def normalize_blocks(yaml_text: str) -> str:
     return hook_chain.dump_yaml(docs) if needs else yaml_text
 
 
-def benchmark_sets(text, wl, profiled):
-    """(text, --set specs) of the fixed-shape contract: an unprofiled run carries no profiler flag."""
+def benchmark_steps(wl, profiled, confirm=False):
+    """--num-rollout of a --benchmark render: profiled, confirm or unprofiled ranked."""
+    return wl["num_steps_profiled"] if profiled else wl["confirm_num_steps"] if confirm else wl["num_steps"]
+
+
+def benchmark_sets(text, wl, profiled, confirm=False):
+    """(text, --set specs) of the workload contract: an unprofiled run carries no profiler flag."""
     if not profiled:
         for f in PROFILER_FLAGS:
             if _flag_matches(text, f):
                 text = apply_unset(text, f)
-    steps = wl["num_steps_profiled"] if profiled else wl["num_steps"]
+    steps = benchmark_steps(wl, profiled, confirm)
     sets = [f"global-batch-size={wl['gbs']}", f"rollout-batch-size={wl['gbs']}", f"num-rollout={steps}"]
     if wl["dataset"]:
         sets.append(f"prompt-data={wl['dataset']}")
@@ -472,8 +481,7 @@ def profiler_flags(text, run_id, steps, wl, prof, unchecked=False):
         raise RuntimeError(f"ranked --benchmark runs require --profile-steps {prof['profile_start']}-{prof['profile_end']}")
     if start - 2 < wl["num_steps"]:   # slime steps the profiler inside the step timer: setup in START-2, warm-up START-1
         raise RuntimeError(f"--profile-steps {start}-{end}: the profiler's setup step {start - 2} falls inside steps "
-                           f"0-{wl['num_steps'] - 1} (measured window and correctness check); use START >= "
-                           f"{wl['num_steps'] + 2}")
+                           f"0-{wl['num_steps'] - 1} of the measured run; use START >= {wl['num_steps'] + 2}")
     n_roll = _flag_int(text, "num-rollout")
     if n_roll is None and not unchecked:
         raise RuntimeError(f"--profile-steps {start}-{end}: the YAML's --num-rollout is not one literal integer (a shell "
@@ -510,7 +518,7 @@ def build(args, base_text, wl, prof=None):
     notes = []
     sets = list(args.set)
     if args.benchmark:
-        base_text, contract = benchmark_sets(base_text, dict(wl, **(prof or {})), args.with_profiler)
+        base_text, contract = benchmark_sets(base_text, dict(wl, **(prof or {})), args.with_profiler, args.confirm)
         sets += contract
     base_run_id = infer_base_run_id(base_text)
     text = apply_name_suffix(base_text, base_run_id, args.run_id)
@@ -565,6 +573,10 @@ def main(argv=None):
                         (args.unchecked_num_rollout, "--unchecked-num-rollout")):
         if given and not args.with_profiler:
             raise RuntimeError(f"{name} needs --with-profiler")
+    if args.confirm and not args.benchmark:
+        raise RuntimeError("--confirm needs --benchmark")
+    if args.confirm and args.with_profiler:
+        raise RuntimeError("a confirm run is unprofiled: drop --with-profiler")
     prof = None
     if args.with_profiler and args.profile_steps is None:
         # the default range: K from --profile-capture, else $AUTOTUNE_PROFILE_CAPTURE (validated only here)
@@ -585,10 +597,11 @@ def main(argv=None):
     Path(args.out).write_text(out_text)
     print(f"Wrote {args.out} (run {args.run_id}, owner label {'='.join(owner())})")
     if args.benchmark:
-        steps = prof["num_steps_profiled"] if prof else wl["num_steps"]
+        steps = benchmark_steps(dict(wl, **(prof or {})), bool(prof), args.confirm)
+        mode = "profiled" if args.with_profiler else "confirm" if args.confirm else "unprofiled"
         notes.append(f"workload: GBS {wl['gbs']}, rows of {wl['seq_len']} tokens, {steps} steps "
-                     f"({'profiled' if args.with_profiler else 'unprofiled'}; window {wl['window_start']}-"
-                     f"{wl['window_end']}, target step {steps - 1}), dataset {wl['dataset'] or '(baseline)'}")
+                     f"({mode}; window {wl['window_start']}-{wl['window_end']}, target step {steps - 1}), "
+                     f"dataset {wl['dataset'] or '(baseline)'}")
     for n in notes:
         print(f"  {n}")
 

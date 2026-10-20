@@ -16,7 +16,8 @@ that of the Ray container (the first container) of every RayJob head and worker 
 do not count. When a run's groups name several, --image says which one trained. --allow-image-change accepts a
 candidate that changes the image, or an ambiguous one recorded as unknown; layer 1 then applies no image rules.
 A profiled run changes the run length, which slime's LR and weight-decay schedules can depend on, so it is never a
-side: a profiled candidate gets one unprofiled confirm run, and that run is paired.
+side: a profiled candidate gets one unprofiled confirm run, and that run is paired. When the campaign's runs are
+shorter than 20 steps, both sides are confirm runs (make_run_yaml.py --benchmark --confirm), which have 20.
 
 Everything is checked before anything is written. The pair directory gets base.log, win.log, gpus.json (each run's
 GPU count) and images.json (each run's image), replacing earlier copies. Then run parity_verdict.py <dir>.
@@ -51,7 +52,11 @@ def problems(log, side):
         out.append(f"{side}: the run is profiled; run it once unprofiled and pass that run")
     loss, _, _ = parity_verdict.read_steps(log)
     missing = [s for s in range(parity_verdict.STEPS) if s not in loss]
-    if missing:
+    n = args.get("num_rollout", "")
+    if n.isdigit() and int(n) < parity_verdict.STEPS:
+        out.append(f"{side}: the run has {n} steps, fewer than the {parity_verdict.STEPS} the check scores; pair its "
+                   f"{parity_verdict.STEPS}-step confirm run (make_run_yaml.py --benchmark --confirm)")
+    elif missing:
         out.append(f"{side}: missing the training loss of steps {missing[:5]}{'...' if len(missing) > 5 else ''}")
     return out, args.get("num_rollout")
 

@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 """make_run_yaml.py: token-level flag edits (other flags on a line survive, comments are ignored, --add works without a
-`2>&1 | tee` anchor), run ownership and the fixed-shape dataset contract. Run: python3 -m pytest skill/scripts/tests"""
+`2>&1 | tee` anchor), run ownership, the workload contract and confirm runs. Run: python3 -m pytest skill/scripts/tests"""
 import os
 import subprocess
 import sys
@@ -155,8 +155,35 @@ def test_benchmark_profile_capture(tmp_path):
     assert p.returncode == 2 and "invalid choice" in p.stderr
     p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", "--benchmark", "--profile-capture", "2")
     assert p.returncode == 1 and "--profile-capture needs --with-profiler" in p.stderr
-    p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", "--benchmark", AUTOTUNE_NUM_STEPS="14")
-    assert p.returncode == 1 and "below the minimum 20" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-r5", "--benchmark", AUTOTUNE_NUM_STEPS="7")
+    assert p.returncode == 1 and "below the minimum 8" in p.stderr      # window 5-6 holds fewer than 3 steps
+
+
+def test_short_runs_and_their_confirm_runs(tmp_path):
+    """A 10-step campaign ranks 10-step runs; its confirm runs hold the check's 20 steps; a profiled run starts after
+    the measured run."""
+    short = {"AUTOTUNE_NUM_STEPS": "10"}
+    p, out = make(tmp_path, SCRIPT, "alice-tune-s1", "--benchmark", **short)
+    assert p.returncode == 0 and flags(out)["num_rollout"] == ["10"], p.stderr
+    assert "10 steps (unprofiled; window 5-9, target step 9)" in p.stdout
+    p, conf = make(tmp_path, SCRIPT, "alice-tune-s1", "--benchmark", "--confirm", **short)
+    assert p.returncode == 0 and flags(conf)["num_rollout"] == ["20"], p.stderr
+    assert "20 steps (confirm; window 5-9, target step 19)" in p.stdout
+    assert {k for k in set(flags(out)) | set(flags(conf)) if flags(out).get(k) != flags(conf).get(k)} == {"num_rollout"}
+    p, prof = make(tmp_path, SCRIPT, "alice-tune-s2", "--benchmark", "--with-profiler", "--profile-ranks", "all",
+                   **short)
+    f = flags(prof)
+    assert p.returncode == 0 and (f["num_rollout"], f["profile_step_start"], f["profile_step_end"]) == \
+        (["13"], ["12"], ["13"]), p.stderr
+    p, long_conf = make(tmp_path, SCRIPT, "alice-tune-s3", "--benchmark", "--confirm", AUTOTUNE_NUM_STEPS="30")
+    assert p.returncode == 0 and flags(long_conf)["num_rollout"] == ["30"], p.stderr   # pairs with 30-step runs
+    _, plain = make(tmp_path, SCRIPT, "alice-tune-s4", "--benchmark")
+    _, default_conf = make(tmp_path, SCRIPT, "alice-tune-s4", "--benchmark", "--confirm")
+    assert default_conf == plain                # at N >= 20 a confirm run is an unprofiled ranked render
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-s5", "--confirm", **short)
+    assert p.returncode == 1 and "--confirm needs --benchmark" in p.stderr
+    p, _ = make(tmp_path, SCRIPT, "alice-tune-s5", "--benchmark", "--confirm", "--with-profiler", **short)
+    assert p.returncode == 1 and "a confirm run is unprofiled" in p.stderr
 
 
 def test_profile_range_stays_after_the_measured_steps(tmp_path):

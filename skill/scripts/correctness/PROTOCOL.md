@@ -10,9 +10,10 @@ check as the final cascade (`SKILL.md`, "When to stop").
 - One baseline side and one candidate side, **20 training steps each** (steps 0-19).
 - Same frozen benchmark data (bytes and order), same seed, same global batch size (the benchmark GBS), and the same
   training image for both sides.
-- **The default reuses the benchmark runs.** Under the workload contract of `make_run_yaml.py --benchmark` the
-  baseline's unprofiled benchmark run and the candidate's own unprofiled benchmark run already hold steps 0-19 on
-  the same data, seed and GBS, so the check needs no new launch:
+- **The default reuses the benchmark runs.** Under the workload contract of `make_run_yaml.py --benchmark`, with
+  runs of at least 20 steps (`$AUTOTUNE_NUM_STEPS`, default 20), the baseline's unprofiled benchmark run and the
+  candidate's own unprofiled benchmark run already hold steps 0-19 on the same data, seed and GBS, so the check
+  needs no new launch:
   `pair_from_runs.py --base-log <baseline train.log> --base-yaml <its yaml> --win-log <candidate train.log>
   --win-yaml <its yaml> --pair <dir>` checks both runs, then copies the two logs into a pair directory and writes
   each run's GPU count (`gpus.json`) and image (`images.json`). It refuses, before writing anything, a missing log or
@@ -20,7 +21,9 @@ check as the final cascade (`SKILL.md`, "When to stop").
   different `--num-rollout`, and two runs on different images unless `--allow-image-change` says the candidate's
   recipe changes the image. A profiled run is longer, and slime's LR and weight-decay schedules can depend on the
   run length, so it is never a side: a candidate whose ranked run was profiled gets one unprofiled confirm run
-  (`SKILL.md`, Verdict) and that run is paired.
+  (`SKILL.md`, Verdict) and that run is paired. When the campaign's runs are shorter than 20 steps, the baseline and
+  the candidate each get a 20-step confirm run (`make_run_yaml.py --benchmark --confirm`), and those two runs are
+  paired.
 - **Probe arms, to diagnose a failing pair.** Make each arm from its ranked run's YAML:
   `make_parity_arm.py --base <run.yaml> --run-id <arm_run_id> --out <arm.yaml>`. It renames the run (the arm id
   follows the run-id and prefix rules of `make_run_yaml.py`, and the arm gets the owner label), sets `--num-rollout 20`, and enables the count probe (`parity_probe/sitecustomize.py`) on every pod

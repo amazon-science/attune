@@ -9,7 +9,8 @@
 #     --session SESSION_ID continues that Claude Code session (e.g. after an outage)
 #
 # The first launch in <campaign_dir>:
-#   1. Checks the settings: the required ones are set, ATTUNE_RUN_PREFIX is campaign-specific (<user>-<tag>-), and
+#   1. Checks the settings: the required ones are set, the workload settings and the verdict band are usable
+#      (skill/scripts/workload.py, calibration.py), ATTUNE_RUN_PREFIX is campaign-specific (<user>-<tag>-), and
 #      the log pod $AUTOTUNE_LOG_POD mounts the shared volume read-only (harness/log_pod.py). It prints the campaign
 #      id (ATTUNE_CAMPAIGN_ID, which names the campaign's summary) and the effective web setting.
 #   2. Copies $ATTUNE_HOME/skill and $ATTUNE_HOME/harness into the launcher's control directory
@@ -154,11 +155,24 @@ export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 CLAUDE
 export AUTOTUNE_PROJECT_ROOT="$CAMPAIGN_DIR"
 export AUTOTUNE_GPUH_LOG="${AUTOTUNE_GPUH_LOG:-$CAMPAIGN_DIR/gpuh.jsonl}"
 
-# The calibration file (band, baseline denominator) is optional; when it is named it must be usable.
-if [ -n "${AUTOTUNE_CALIBRATION:-}" ]; then
-  python3 "$SRC/skill/scripts/calibration.py" >/dev/null || die "AUTOTUNE_CALIBRATION is not usable"
-elif [ -n "${AUTOTUNE_GPUH_BUDGET:-}" ]; then
-  echo "WARNING: no AUTOTUNE_CALIBRATION; verdicts use the default 3% band and the campaign's own baseline run" >&2
+# config.env seals the workload settings, so refuse now a value workload.py would refuse at every render.
+python3 "$SRC/skill/scripts/workload.py" >/dev/null \
+  || die "the workload settings (AUTOTUNE_NUM_STEPS, AUTOTUNE_WINDOW_START, AUTOTUNE_GBS, AUTOTUNE_SEQ_LEN) are not" \
+         "usable (above)"
+# The calibration file (band, baseline denominator) is optional; when it is named it must be usable. A set
+# AUTOTUNE_BAND (default 0.03) must be a fraction either way; it is the band when there is no file.
+if [ -n "${AUTOTUNE_CALIBRATION:-}" ] && [ -n "${AUTOTUNE_BAND:-}" ]; then
+  BAND_SETTINGS="AUTOTUNE_CALIBRATION or AUTOTUNE_BAND"
+elif [ -n "${AUTOTUNE_CALIBRATION:-}" ]; then
+  BAND_SETTINGS=AUTOTUNE_CALIBRATION
+else
+  BAND_SETTINGS=AUTOTUNE_BAND
+fi
+CALIBRATION=$(python3 "$SRC/skill/scripts/calibration.py") || die "$BAND_SETTINGS is not usable (above)"
+if [ -z "${AUTOTUNE_CALIBRATION:-}" ] && [ -n "${AUTOTUNE_GPUH_BUDGET:-}" ]; then   # the band the campaign's copy uses
+  BAND=$(printf '%s' "$CALIBRATION" | python3 -c 'import json, sys; print(json.load(sys.stdin)["band"])' 2>/dev/null) \
+    || BAND=unknown
+  echo "WARNING: no AUTOTUNE_CALIBRATION; verdicts use the band $BAND and the campaign's own baseline run" >&2
 fi
 if [ "$FIRST" = 1 ]; then   # the dataset every run trains on; the record holds its hash
   DATASET=${AUTOTUNE_DATASET:-}

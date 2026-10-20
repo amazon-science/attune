@@ -55,8 +55,9 @@ in the example are illustrative placeholders, not results.)
 - `run_id` — unique in project; suffix for all K8s names; ≤47 chars.
 - `kind` — `baseline | ranked | confirm | parity | unranked | stop`. `baseline`: the baseline benchmark run (a failed
   attempt at it keeps `kind: "baseline"` with `status: "errored"`). `ranked`: a candidate benchmark run. `confirm`:
-  the one unprofiled rerun of a recipe whose ranked run was profiled, made only to give the final correctness check
-  its candidate side (SKILL.md "Final correctness check"); not ranked, no budget slot, counted in GPU-hours.
+  an unprofiled run made only to give the final correctness check a side its ranked run cannot give: a recipe whose
+  ranked run was profiled, or, when ranked runs are shorter than 20 steps, the baseline and each recipe the check tests
+  (`make_run_yaml.py --benchmark --confirm`; SKILL.md "Verdict"); not ranked, no budget slot, counted in GPU-hours.
   `parity`: a diagnostic correctness-check arm (`make_parity_arm.py`). `unranked`: a diagnostic run that is not a
   candidate (a longer profile, a feasibility probe). `stop`: the STOP row below.
 - `launched_at` — ISO-8601 UTC (ledger-entry time, not pod-up time).
@@ -67,8 +68,8 @@ in the example are illustrative placeholders, not results.)
 - `parallelism_5d` — `TP=.. DP=.. CP=.. EP=.. PP=.. vpp=..` (DP derived = `world/(TP×PP×CP)` but written explicitly; `vpp=1` = OFF; note `ETP` only if `ETP≠EP`).
 - `status` — `launching | running | completed | killed | errored`.
 - `metrics` *(required on a completed benchmark row)* — the JSON `read_metrics.sh` printed for the measured window,
-  copied unchanged. `aggregate_tok_per_s_per_gpu` is the ranked number; `window` is the fixed measurement window
-  ([5, 19] at the default step count); `step_time_stats` and `means_in_window` carry the step-time distribution and
+  copied unchanged. `aggregate_tok_per_s_per_gpu` is the ranked number; `window` is the measurement window
+  ([5, 19] at the defaults); `step_time_stats` and `means_in_window` carry the step-time distribution and
   the window means of the `perf N:` fields. Add `peak_gpu_mem_gb` when you read it from the log.
 - `verdict` *(terminal, on `ranked` rows)* — `win | tie | lose | error | killed`, decided by the band of SKILL.md
   "Verdict" (no throughput rerun of a tie).
@@ -76,7 +77,7 @@ in the example are illustrative placeholders, not results.)
 - `delta_vs_baseline_pct` *(required for a ranked terminal row)* — end-to-end gain against the original fixed-allocation baseline.
 - `gpuh`, `gpuh_cumulative` *(terminal; required in GPU-hour budget mode, SKILL.md "When to stop")* — this run's GPU-hours (`num_gpus x` admission -> job end, copied from the run's completed `gpuh.jsonl` line (`scripts/run_gpuh.py <run_id> --record`, before teardown; the log is append-only and a run's last line counts); 0 if never admitted) and the campaign total after it, summed over every row: baseline, ranked, confirm, failed, killed and correctness-check (`kind: parity`) runs. One row per run_id carries its `gpuh`.
 - `objective_class` *(required on a WIN row)* — `structural` (placement/scheduling only, including packing / `--max-tokens-per-gpu` / `--micro-batch-size` changes, also with a per-microbatch MoE aux loss) `same_math` (a fusion, kernel or dispatcher implementation, optimizer offload or other same-function swap: layer 1 accepts it with a passed component test, refuses it on a failed test or a known stack defect, and otherwise lists it as unknown for review) `numeric` (another change of the math outside the `objective` class: unknown to layer 1, decided by the step-0 check and listed for review) or `objective` (changes an `objective`-class argument of `numerics_list.yaml`; see the objective-preserving Invariant in SKILL.md). An `objective` win is never shipped; any other ships only with `parity_checked:true`.
-- `parity_checked` *(required before shipping any recipe)* — `true` only when the correctness check (`scripts/correctness/PROTOCOL.md`: the baseline's and this recipe's own unprofiled benchmark runs, paired by `pair_from_runs.py` and scored by `parity_verdict.py`) PASSes for this recipe vs the baseline. Record both run_ids (the recipe's side is its ranked run, or its `confirm` run when the ranked run was profiled) and the layer-1 and step-0 results with the verdict's review lines in `what_i_learned`. **Do not label a recipe/change "training-neutral" anywhere (recipe header, RESULTS.md, PR) unless this is true.**
+- `parity_checked` *(required before shipping any recipe)* — `true` only when the correctness check (`scripts/correctness/PROTOCOL.md`: the baseline's and this recipe's own unprofiled benchmark runs, paired by `pair_from_runs.py` and scored by `parity_verdict.py`) PASSes for this recipe vs the baseline. Record both run_ids (each side is its ranked run, or its `confirm` run when the ranked run was profiled or shorter than 20 steps) and the layer-1 and step-0 results with the verdict's review lines in `what_i_learned`. **Do not label a recipe/change "training-neutral" anywhere (recipe header, RESULTS.md, PR) unless this is true.**
 - `verified_from_source` *(required whenever a run changes any flag)* — the `file:line`(s) in the running image's `arguments.py`/source where you confirmed each changed flag's resolved behavior (what it sets/asserts, and what it silently overrides). Per SKILL.md loop step L2, no flag is tried un-read; this field records that you read it. Guards against memory/hallucination and silent flag-override (e.g. grad-reduce-in-bf16).
 - `profiled` *(required on a terminal row)* — `true` when the run was launched with the profiler (`--with-profiler`), else `false`. Profiling is per launch, so this records which runs carry a trace.
 - `profile_reason` *(required on a terminal row)* — one line: why this run was profiled, or why it did not need a trace (e.g. "baseline: first diagnosis", "value sweep on an already diagnosed lever").
@@ -137,7 +138,7 @@ appear as SKILL.md Invariants/gotchas — repeated here as a scan-able checklist
 13. **Strip `NCCL_PROTO` from inherited YAMLs** — auto-select beats a manual pin, and `NCCL_PROTO=Simple` on EFA hangs PP>1 (easily misread as a hardware fault).
 14. **Intranode-MoE placement follows the EP/ETP rank-fold, not `TP × EP`** (the `TP × EP` mnemonic agrees with the rule only when ETP = TP, Megatron's default when ETP is unset). The rule + its source (`parallel_state.py` expert rank generator) is in levers.md §b; confirm the fold order for your image with `print_topology.md` rather than assuming.
 15. **When moving a YAML between p5e↔p5en, update BOTH `instance-type` AND `vpc.amazonaws.com/efa`** (p5e=32, p5en=16 NICs) — a mismatch fails NCCL bootstrap with `NET/OFI Unexpected number of remote rails`.
-16. **Don't port a winner topology across datasets without re-profiling** — short-seq vs long-seq favor different families (the swing can be large). Characterize the new data (SFT: the token-length distribution; RL: prompt scan + first-rollout `response_len`) → refresh `data_insights.md` → re-sweep.
+16. **Don't port a winner topology across datasets without re-profiling** — short-seq vs long-seq favor different families (the swing can be large). Characterize the new data with `scripts/data/analyze_token_distribution.py` (SFT: the token-length distribution; RL: `--rl-prompts` on the prompt set, then the first rollouts' `response_len`) → refresh `data_insights.md` → re-sweep.
 
 ---
 

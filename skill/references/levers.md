@@ -9,7 +9,7 @@ Measured on SFT and pretraining only; most of these knobs are expected to carry 
 This catalog holds what the campaign model does not reliably know, measured against Claude Opus 5.5; it is re-probed
 when the campaign model changes.
 
-**Scope tags** (*Scope: workload; model; GPUs*). **F8** fixed 8,192-token SFT rows, GBS 128 (the ranking workload);
+**Scope tags** (*Scope: workload; model; GPUs*). **F8** fixed 8,192-token SFT rows, GBS 128 (the default ranking workload);
 **F2** fixed 2K packed SFT, GBS 128; **F4** fixed 4K pretraining, GBS 1,280; **F32** fixed 32K rows (one diagnostic
 run); **V15** variable-length SFT (a public chat set and internal sets, one synthetic; rows ≤ ~15K; dynamic batching, mt
 2K–24K; GBS 128–6,144); **Vchat** the chat set alone (rows ≤ ~4K); **V32** variable-length ≤ 32K; **MOCK** mock-data

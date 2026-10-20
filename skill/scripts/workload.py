@@ -4,10 +4,11 @@
 """Benchmark workload: GBS, row length, dataset and step counts, read from the environment.
 
     AUTOTUNE_GBS                global batch size of every ranked run (default 128)
-    AUTOTUNE_SEQ_LEN            tokens per row; every row has exactly this many (default 8192)
+    AUTOTUNE_SEQ_LEN            row length of fixed-length rows, which the skill's rollout adapter checks
+                                (default 8192)
     AUTOTUNE_DATASET            dataset path stamped as --prompt-data (default: leave the baseline's)
-    AUTOTUNE_NUM_STEPS          --num-rollout of an UNPROFILED ranked run (default 20: steps 0-19; at least 20,
-                                the steps of the correctness check)
+    AUTOTUNE_NUM_STEPS          --num-rollout of an UNPROFILED ranked run (default 20: steps 0-19); the window
+                                START..N-1 must hold at least 3 steps
     AUTOTUNE_PROFILE_CAPTURE    recorded profiler steps K of a PROFILED ranked run (default 1, at most 3)
     AUTOTUNE_WINDOW_START       first measured step (default 5; steps 0..START-1 are warm-up)
 
@@ -18,7 +19,9 @@ A profiled run therefore starts recording at S = N+2: step N (20) carries the se
 steps N+2..N+1+K (22, up to 24) are recorded; --profile-step-end N+2+K is exclusive and the run has N+2+K steps
 (23, 24 or 25). Completion: the last step is N-1 unprofiled (19) and N+1+K profiled (22 at K=1). The correctness check
 reads steps 0-19 of unprofiled runs only: a profiled run changes --num-rollout, which slime's LR and weight-decay
-schedules can depend on.
+schedules can depend on. A confirm run (make_run_yaml.py --benchmark --confirm) is the unprofiled run that gives the
+check a side when a ranked run cannot: it has max(N, 20) steps, so with N below 20 the baseline and each candidate the
+check tests get one, and with N >= 20 it equals an unprofiled ranked run.
 
     workload.py            # print the resolved workload as JSON
     workload.py --shell    # print shell assignments (WINDOW_START=5 ...)
@@ -32,7 +35,7 @@ import sys
 DEFAULT_GBS = 128
 DEFAULT_SEQ_LEN = 8192
 DEFAULT_NUM_STEPS = 20            # unprofiled: steps 0-19, measured 5-19
-MIN_NUM_STEPS = 20                # every run holds the 20 steps of the correctness check
+CHECK_STEPS = 20                  # steps 0-19 of the correctness check (correctness/parity_verdict.py STEPS)
 DEFAULT_PROFILE_CAPTURE = 1       # profiled: + setup 20, warm-up 21, capture 22
 MAX_PROFILE_CAPTURE = 3
 DEFAULT_WINDOW_START = 5
@@ -59,10 +62,8 @@ def resolve():
     """The unprofiled workload. Profiled step counts come from profiled(); a bad $AUTOTUNE_PROFILE_CAPTURE does not
     affect an unprofiled render or poll_run.sh."""
     start = _int_env("AUTOTUNE_WINDOW_START", DEFAULT_WINDOW_START, 1)
-    # N >= 20 (the correctness check's steps) and the window START..N-1 holds >= MIN_WINDOW steps
-    n = _int_env("AUTOTUNE_NUM_STEPS", DEFAULT_NUM_STEPS, max(MIN_NUM_STEPS, start + MIN_WINDOW),
-                 f" (at least {MIN_NUM_STEPS}, and a window from AUTOTUNE_WINDOW_START={start} to step N-1 needs "
-                 f"N >= {start + MIN_WINDOW})")
+    n = _int_env("AUTOTUNE_NUM_STEPS", DEFAULT_NUM_STEPS, start + MIN_WINDOW,
+                 f" (a window of at least {MIN_WINDOW} steps from AUTOTUNE_WINDOW_START={start} to step N-1)")
     if os.environ.get("AUTOTUNE_NUM_STEPS_PROFILED", "").strip():
         print("workload: AUTOTUNE_NUM_STEPS_PROFILED is no longer read; a profiled run has AUTOTUNE_NUM_STEPS + 2 + "
               "AUTOTUNE_PROFILE_CAPTURE steps", file=sys.stderr)
@@ -74,6 +75,7 @@ def resolve():
         "window_start": start,
         "window_end": n - 1,                # the same measured window in both modes
         "target_step": n - 1,               # completion marker, unprofiled
+        "confirm_num_steps": max(n, CHECK_STEPS),   # --num-rollout of a confirm run, a side of the correctness check
     }
 
 

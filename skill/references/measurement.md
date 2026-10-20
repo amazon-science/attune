@@ -8,22 +8,49 @@ is the how-to behind them.
 
 ---
 
-## 0. Fixed-shape benchmark contract
+## 0. Workload and measurement settings
 
-- The workload comes from `scripts/workload.py`: GBS `$AUTOTUNE_GBS` (default 128), row length `$AUTOTUNE_SEQ_LEN` (default 8,192), dataset `$AUTOTUNE_DATASET`, N = `$AUTOTUNE_NUM_STEPS` steps unprofiled (default 20, at least 20) and N+2+K profiled, with K = `$AUTOTUNE_PROFILE_CAPTURE` recorded steps (default 1, so 23).
-- Use frozen, model-tokenizer-specific rows of exactly the row length with no padding.
+The operator defines the workload and the measurement: the dataset and batch, the run length, the window (which steps
+are discarded as warm-up), the noise band, and whether runs share a persistent kernel cache (§5). ATTUNE ranks every
+recipe under those settings. The defaults are the fixed benchmark used to compare recipes across models: fixed
+8,192-token rows at GBS 128, 20-step runs scored on steps 5-19, and a 3% band.
+
+| Setting | Default | What it decides |
+|---|---|---|
+| `AUTOTUNE_NUM_STEPS` (N) | 20 | Steps of an unprofiled ranked run; the window ends at step N-1. Below 20 the correctness check runs on confirm runs (below). |
+| `AUTOTUNE_WINDOW_START` | 5 | First measured step; the steps before it are discarded warm-up. The window START..N-1 holds at least 3 steps. |
+| `AUTOTUNE_BAND` | 0.03 | The verdict band b without a calibration file (SKILL.md "Verdict"), used as given: any fraction strictly between 0 and 1. |
+| `AUTOTUNE_CALIBRATION` | none | A calibration file from at least five baseline replicates on distinct allocations (`calibration.py build`). Its band, max(3%, 3σ/mean), replaces `AUTOTUNE_BAND`, and its mean is the denominator of Δ vs baseline. It is refused unless its step count and window equal the campaign's. |
+
+Only a calibration file's band is floored at 3%. An explicit `AUTOTUNE_BAND` is used as given, so how strict a
+verdict to ask for is the operator's decision.
+
+One validity gate holds under every setting: a window counts only when every step in it logged its `perf N:` line and
+the summed step time matches the log's timestamps (`read_metrics.sh`, §3).
+
+- The workload comes from `scripts/workload.py`: GBS `$AUTOTUNE_GBS` (default 128), row length `$AUTOTUNE_SEQ_LEN` (default 8,192), dataset `$AUTOTUNE_DATASET`, N = `$AUTOTUNE_NUM_STEPS` steps unprofiled (default 20) and N+2+K profiled, with K = `$AUTOTUNE_PROFILE_CAPTURE` recorded steps (default 1, so 23).
+- Use frozen, model-tokenizer-specific rows: by default rows of exactly the row length with no padding, or the
+  campaign's configured dataset (SKILL.md B1), read in the same frozen order by every run.
 - Hold dataset bytes/order, seeds, objective, GBS, hardware type, image, and code fixed (and the GPU count, fixed at the baseline's count: SKILL.md Invariants).
-- Run one N-step job per recipe. Do not restore, publish, or persist a Triton cache.
-- Discard warm-up steps 0-4 and rank only the complete window 5..N-1 (5-19 at the default N=20), the same window for a profiled and an unprofiled run.
+- Run one N-step job per recipe.
+- Discard the warm-up steps 0..START-1 and rank only the complete window START..N-1 (5-19 at the defaults), the same
+  window for a profiled and an unprofiled run.
 - When a run is profiled it runs N+2+K steps (default 23): the same ranked window, then the profiler's setup step N
   (20), its warm-up step N+1 (21) and the K recorded steps N+2..N+1+K (22; up to 22-24 with
   `make_run_yaml.py --profile-capture 3`); never profile the ranked window. Profiling is per launch, not part of the
   contract.
-- Steps 0-19 of an unprofiled run are also its side of the final correctness check (`pair_from_runs.py`), so a
-  shipped number and its correctness evidence come from the same run unless the ranked run was profiled. A profiled
-  run changes `--num-rollout`, which the LR schedule can depend on, so it is never a side of the check; such a recipe
-  gets one unprofiled confirm run for it (SKILL.md, Verdict).
-- Do not apply this protocol to variable-shape data. Use a separately validated window there.
+- The final correctness check scores steps 0-19 of two unprofiled runs (`pair_from_runs.py`). With N of at least 20
+  these are the baseline's and the candidate's ranked runs, so a shipped number and its correctness evidence come
+  from the same run unless the ranked run was profiled. A profiled run changes `--num-rollout`, which the LR schedule
+  can depend on, so it is never a side of the check; such a recipe gets one unprofiled confirm run for it (SKILL.md,
+  Verdict). With N below 20 the ranked runs hold too few steps: the baseline and each recipe the check tests get a
+  20-step confirm run (`make_run_yaml.py --benchmark --confirm`), and those runs form the pair.
+- On a variable-length dataset the protocol is the same: every run reads the same rows in the same order, so step s
+  holds the same tokens in every run and the window compares recipes on identical work. Steps differ from each
+  other in tokens and longest row (`scripts/data/analyze_token_distribution.py` prints the range), and kernels
+  compile for each new micro-batch length, inside the window too (§5; `levers.md`, Compile tail at high PP). The
+  default 3% band was validated on 15-step windows of fixed-length rows; on other data or a shorter window the
+  operator sets `AUTOTUNE_BAND` or builds a calibration file when the budget allows.
 
 ## 1. Where the logs live
 
@@ -110,16 +137,17 @@ grep -oE "'perf/actor_train_tok_per_s': [0-9.]+" train.log | awk -F: '{print $NF
 aggregate_tok_per_s_per_gpu = total_tokens_in_window / total_step_time_in_window / num_gpus
 ```
 
-- **Window: steps 5-19 of the single run** (15 samples at the default step count). Steps 0-4 absorb startup, fixed-shape
-  compilation and allocator warm-up; a few layouts still run 10-15% slow at step 4. The window is predeclared and
-  identical for every recipe.
+- **Window: steps START..N-1 of the single run** (5-19, 15 samples, at the defaults). The discarded steps absorb
+  startup, the first compilation and allocator warm-up; a few layouts still run 10-15% slow at step 4. The window is
+  predeclared by the operator's settings and identical for every recipe.
 - **Do NOT use `mean(per_step_tok_per_s)`** — averaging rates over-weights short steps.
   Aggregate-tokens-over-aggregate-time is the correct reduction.
 - **Report the step_time distribution alongside the aggregate** (mean, standard deviation, CV,
   p50, min, max). A tight p50 with a catastrophic max is diagnostic — see §5. Within-run CV is
   a stability diagnostic, not independent replication.
-- `read_metrics.sh <log> 5 19 <num_gpus>` implements this and emits JSON. The window defaults to
-  `$AUTOTUNE_WINDOW_START` (5) through N-1 (19 at the default N=20). Prefer it over one-off greps. It exits
+- `read_metrics.sh <log>` implements this over the campaign's window and emits JSON: the window defaults to
+  `$AUTOTUNE_WINDOW_START` (5) through N-1 (19 at the default N=20) and the GPU count to `$AUTOTUNE_NUM_GPUS`;
+  `read_metrics.sh <log> <START> <N-1> <num_gpus>` passes them explicitly. Prefer it over one-off greps. It exits
   non-zero / `valid:false` on a short window or bad data.
 
 **MFU expectation:** large-MoE SFT at moderate GPU counts is comm-bound — expect MFU far below
@@ -137,16 +165,14 @@ exception: flags Megatron requires paired (e.g. `--overlap-grad-reduce` + `--ove
 — call the coupling out in the hypothesis. Never stack "winner + new flag" on top of other
 un-validated recent changes.
 
-**Don't dynamically pick windows to make a config win.** The window (5-19) is pre-declared and
-fixed across the sweep; consistency matters more than optimizing each comparison.
+**Don't dynamically pick windows to make a config win.** The window (the operator's, 5-19 by default) is
+pre-declared and fixed across the sweep; consistency matters more than optimizing each comparison.
 
 **Sanity checks before trusting any number:**
 - Run reached its last step (19 unprofiled, 22 profiled, at the defaults; `poll_run.sh` prints the `target_step` it used)? A shorter `SUCCEEDED` RayJob is incomplete or
   swallowed an actor error.
-- Every perf line present in 5-19? A short count = dropped emission → aggregate invalid
+- Every perf line present in the window? A short count = dropped emission → aggregate invalid
   (`read_metrics.sh` returns `valid:false`).
-- No persistent compilation cache was restored, mounted, or published?
-- No new shape or compilation tail appeared in the measured window? A late compile invalidates the run.
 - `num_gpus` right? A 32-vs-16 miscount doubles throughput on paper.
 - A fresh run_id? A run that resumes from a stale `<run_id>/checkpoints/` skips steps silently (§7).
 
@@ -168,11 +194,13 @@ is the authoritative protocol: pair setup, the `pair_from_runs.py` and `parity_v
 | spiked | normal (≈ p50) | **Real rollout stall** — trainer waiting on inference. Needs warmup requests / persistent engine. |
 | stays near zero | spiked | **JIT recompile tail** — a kernel rebuild triggered by a new microbatch shape (the diagnostic — `train_wait≈0` while `actor_train` spikes — is empirical/verified; the *mechanism* is uncited, likely Megatron/TE JIT — confirm against the framework/version before asserting it). Dynamic batching exposes new shapes early; higher PP depth × vpp enlarges the shape space. |
 
-**Fixed-shape policy:** a fresh job may compile during startup, which is why steps 0-4 are excluded.
-Exact fixed-length rows should not introduce a new shape later. Any compile-tail signature in the measured window
-means the run violated that assumption; mark it invalid and diagnose the data path or runtime
-rather than changing the window. Do not restore a persistent cache to hide the violation.
-Do not add compile-cache wiring of your own.
+**Compile time in the window.** A fresh job compiles during startup, which the discarded warm-up steps absorb. Compile
+time inside the window, such as a recompile for a new micro-batch length on variable-length data, counts as part of
+the run's measured time, and the run stays valid; the table above explains its slow steps. The operator's settings
+decide how much of it the window holds: a later `AUTOTUNE_WINDOW_START` discards more early steps, and a longer run
+dilutes the rest. A persistent kernel cache is also the operator's choice, set in the baseline YAML, whose
+environment every run keeps; a cache shared across runs lets earlier runs warm later ones, so scores then depend on
+run order.
 
 ## 6. Profiling
 
@@ -189,7 +217,8 @@ On miles (v0.1.0) the default `miles_compat` hook applies the `SLIME_PROFILE_*` 
 miles version it leaves miles' profiler factory in place and prints `MILES_COMPAT_HOOK_SKIP`; that factory records
 shapes, stacks, memory and FLOPs, so expect larger traces than on slime.
 
-**Standard flags** (`make_run_yaml.py --benchmark --with-profiler` adds these):
+**Standard flags** (`make_run_yaml.py --benchmark --with-profiler` adds these; the range is N+2 to N+2+K, here at the
+default step counts):
 ```
 --use-pytorch-profiler --profile-target train_overall \
 --profile-step-start 22 --profile-step-end 23 \
@@ -268,7 +297,7 @@ that specific collective.
 **When to extend profiling** (the `SLIME_PROFILE_*` switches go on with `make_run_yaml.py --env`): imbalance inside
 a stage (TP/DP peers) → `SLIME_PROFILE_ALL_RANKS=1`; memory → `SLIME_PROFILE_MEMORY=1 --record-memory-history`;
 kernel tuning → `SLIME_PROFILE_WITH_STACK=1`;
-do not extend or shift the 5-19 ranking window after seeing results. A longer diagnostic is
+do not extend or shift the ranking window after seeing results. A longer diagnostic is
 unranked and recorded separately. **Skip profiling** only when the hypothesis is fully
 tok/s-measurable and you already have a matching base-config profile.
 

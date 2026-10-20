@@ -1,7 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""launch_campaign.sh with a fake claude and kubectl: it refuses a shared run prefix, a writable log pod and an inbox
-inside the campaign or the tree's skill/ and harness/, makes the campaign's read-only copies (the lever catalog among
+"""launch_campaign.sh with a fake claude and kubectl: it refuses a shared run prefix, a writable log pod, a workload
+or band its scripts would refuse and an inbox inside the campaign or the tree's skill/ and harness/, names the band it
+warns of as the campaign's copy reports it, makes the campaign's read-only copies (the lever catalog among
 them), config.env (with the manifest's model, GPU, image and framework) and integrity record (with the dataset's hash
 and the source tree), gives the session an ATTUNE_HOME that names the copies and no lessons inbox, renders and records
 the web switch, holds a later launch to the campaign's settings, relaunches from config.example.env, warns at session
@@ -187,12 +188,52 @@ def test_web_access_off(launch):
     ({"ATTUNE_RUN_PREFIX": "tune-"}, "campaign-specific"), ({"ATTUNE_RUN_PREFIX": "Alice-Tune-"}, "campaign-specific"),
     ({"ATTUNE_RUN_PREFIX": ""}, "ATTUNE_RUN_PREFIX is not set"), ({"FAKE_POD_READ_ONLY": "0"}, "readOnly: true"),
     ({"AUTOTUNE_ALLOW_WEB": "yes"}, "AUTOTUNE_ALLOW_WEB"), ({"ATTUNE_LESSONS_INBOX": "inbox"}, "absolute path"),
+    ({"AUTOTUNE_BAND": "5"}, "AUTOTUNE_BAND is not usable"),
+    ({"AUTOTUNE_CALIBRATION": "/no/such/cal.json"}, "AUTOTUNE_CALIBRATION is not usable"),
+    ({"AUTOTUNE_NUM_STEPS": "5"}, "AUTOTUNE_NUM_STEPS=5 is below the minimum 8"),
+    ({"AUTOTUNE_NUM_STEPS": "ten"}, "AUTOTUNE_NUM_STEPS='ten' is not an integer"),
+    ({"AUTOTUNE_WINDOW_START": "18"}, "default 20 is below the minimum 21"),
+    ({"AUTOTUNE_WINDOW_START": "0"}, "AUTOTUNE_WINDOW_START=0 is below the minimum 1"),
     ({"AUTOTUNE_DATASET": "/no/such/file.parquet"}, "finds no dataset at /no/such/file.parquet"),
     ({"AUTOTUNE_DATASET": "", "SFT_DATA": "", "ATTUNE_BASELINE_YAML": "/x.yaml"}, "no dataset")])
 def test_refusals(launch, env, message):
     p = launch(**env)
     assert p.returncode == 2 and message in p.stderr, p.stderr
     assert not launch.control.exists() and not launch.calls()
+
+
+def test_a_bad_workload_names_its_settings(launch):
+    p = launch(AUTOTUNE_NUM_STEPS="5")
+    assert p.returncode == 2 and "the workload settings (AUTOTUNE_NUM_STEPS, AUTOTUNE_WINDOW_START" in p.stderr
+    assert launch(AUTOTUNE_NUM_STEPS="8", AUTOTUNE_WINDOW_START="5").returncode == 0, "the shortest valid window"
+
+
+def test_a_bad_band_beside_a_calibration_file_is_named(launch):
+    cal = launch.tmp / "cal.json"
+    cal.write_text(json.dumps({"denominator": 100.0, "sigma_alloc": 1.0, "band": 0.03, "num_steps": 20,
+                               "window": [5, 19], "runs": [{"nodes": ["n%d" % i]} for i in range(5)]}))
+    p = launch(AUTOTUNE_CALIBRATION=str(cal), AUTOTUNE_BAND="5")
+    assert p.returncode == 2 and "AUTOTUNE_BAND='5' is not a fraction" in p.stderr, p.stderr
+    assert "AUTOTUNE_CALIBRATION or AUTOTUNE_BAND is not usable" in p.stderr and not launch.control.exists()
+    assert launch(AUTOTUNE_CALIBRATION=str(cal), AUTOTUNE_BAND="0.05").returncode == 0
+
+
+def test_the_band_warning_names_the_band_the_campaign_uses(launch):
+    p = launch(AUTOTUNE_GPUH_BUDGET="100", AUTOTUNE_BAND="0.05")
+    assert p.returncode == 0 and "verdicts use the band 0.05 and" in p.stderr, p.stderr
+
+
+def test_a_campaign_sealed_before_the_band_setting_warns_of_its_own_band(launch):
+    """Its config.env has no AUTOTUNE_BAND and its calibration.py uses 0.03: a shell's AUTOTUNE_BAND changes nothing."""
+    tree = _tree(launch)
+    old = {"band": 0.03, "denominator": None, "source": "default (no calibration file)"}
+    (tree / "skill" / "scripts" / "calibration.py").write_text("print(%r)\n" % json.dumps(old))
+    template = tree / "harness" / "settings.template.json"
+    template.write_text(template.read_text().replace('    "AUTOTUNE_BAND": "${AUTOTUNE_BAND}",\n', ""))
+    assert launch(ATTUNE_HOME=str(tree), AUTOTUNE_GPUH_BUDGET="100").returncode == 0
+    assert "AUTOTUNE_BAND=" not in (launch.control / "config.env").read_text()
+    p = launch("--session", "abc", ATTUNE_HOME=str(tree), AUTOTUNE_BAND="0.07")
+    assert p.returncode == 0 and "verdicts use the band 0.03 and" in p.stderr and "0.07" not in p.stderr, p.stderr
 
 
 def _tree(launch, drop=()):

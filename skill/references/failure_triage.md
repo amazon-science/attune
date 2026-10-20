@@ -166,7 +166,7 @@ If the config truly matches a known-good baseline and it still hangs, enable Fli
 
 ### RayJob reports SUCCEEDED in <30 min (suspiciously fast) — verify it didn't crash at init
 
-**Pattern:** `kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" get rayjob <run_id>` returns `jobStatus=SUCCEEDED, deploymentStatus=Complete` far faster than a real fixed-shape benchmark run takes on this recipe (a crash at init "completes" almost immediately). Driver pod is already gone, so logs must be pulled from the shared volume.
+**Pattern:** `kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" get rayjob <run_id>` returns `jobStatus=SUCCEEDED, deploymentStatus=Complete` far faster than a real benchmark run takes on this recipe (a crash at init "completes" almost immediately). Driver pod is already gone, so logs must be pulled from the shared volume.
 
 **Why this matters:** the Ray driver exits 0 whenever the Python entrypoint exits 0 — including when slime's training loop raises deep inside an actor and the error is swallowed during cluster teardown. The rayjob state says "SUCCEEDED" but `train.log` on the shared volume has a stack trace. `poll_run.sh` reports a SUCCEEDED run whose `latest_step` is below its target as `errored`, and one with no log as `done-unknown`; read the log before you trust any short SUCCEEDED run.
 
@@ -297,7 +297,7 @@ If `microbatches_per_rank < PP`, the schedule can't fill the pipeline and Megatr
 
 ## Pattern: `step_time_max` is many times `step_time_p50`, with `train_wait_time≈0`
 
-A big step_time_max with a tight p50 looks like a rollout stall but usually isn't — it's JIT **compile-tail** (a new dynamic-batch microbatch shape triggering a one-time kernel recompile). The fixed-shape protocol permits startup compilation only in the discarded steps 0-4. A compile-tail signature in the measured window (steps 5-19 at the defaults) invalidates the run; diagnose an unexpected shape or runtime path instead of shifting the window or restoring a persistent cache. Distinguish stall vs compile-tail by reading `perf/train_wait_time`: it spikes = real rollout stall; it stays near zero while `actor_train_time` spikes = compile-tail. One-line check: `grep 'perf ' train.log | grep -oE "train_wait_time[=:] ?[0-9.]+" | sort -t: -k2 -n | tail`. Full diagnosis + the train_wait_time/actor_train_time table: `measurement.md`.
+A big step_time_max with a tight p50 looks like a rollout stall but usually isn't — it's JIT **compile-tail** (a new dynamic-batch microbatch shape triggering a one-time kernel recompile). Its time counts in the run's score like any other step time, and the run stays valid (`measurement.md` §5). On fixed-length rows a compile late in the window points to an unexpected shape or runtime path. Distinguish stall vs compile-tail by reading `perf/train_wait_time`: it spikes = real rollout stall; it stays near zero while `actor_train_time` spikes = compile-tail. One-line check: `grep 'perf ' train.log | grep -oE "train_wait_time[=:] ?[0-9.]+" | sort -t: -k2 -n | tail`. Full diagnosis + the train_wait_time/actor_train_time table: `measurement.md`.
 
 ### `--overlap-param-gather` and `--overlap-grad-reduce` are coupled
 

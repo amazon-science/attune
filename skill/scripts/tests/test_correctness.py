@@ -593,6 +593,15 @@ def test_pair_from_benchmark_runs_scores_without_new_arms(tmp_path):
     assert res[0]["base_tok_s_gpu"] == 1000.0 * 9.0 / 10.0 / 24   # logged tokens / step time / GPUs over 5-19
 
 
+def test_pair_from_runs_pairs_longer_runs_on_steps_0_to_19(tmp_path):
+    long_run = dict(RUN, num_rollout="30")
+    p = _pair_from_runs(tmp_path, fixtures.train_log(args=long_run, steps=30, counts=False),
+                        fixtures.train_log(args=dict(long_run, tensor_model_parallel_size="4"), steps=30, counts=False))
+    assert p.returncode == 0, p.stderr
+    q, res = _verdict(tmp_path / "pair", tmp_path)
+    assert q.returncode == 0 and res[0]["PASS"], q.stdout
+
+
 def test_pair_from_runs_refuses_profiled_short_or_mismatched_runs(tmp_path):
     def refused(*a, **kw):
         d = tmp_path / ("case%d" % len(list(tmp_path.iterdir())))
@@ -604,6 +613,10 @@ def test_pair_from_runs_refuses_profiled_short_or_mismatched_runs(tmp_path):
     assert "win: the run is profiled" in refused(ok, fixtures.train_log(args=dict(RUN, use_pytorch_profiler="True")))
     assert "base: missing the training loss of steps [14" in refused(fixtures.train_log(args=RUN, steps=14), ok)
     assert "--num-rollout differs (20 vs 22)" in refused(ok, fixtures.train_log(args=dict(RUN, num_rollout="22")))
+    short = fixtures.train_log(args=dict(RUN, num_rollout="10"), steps=10)   # a 10-step campaign's ranked run
+    err = refused(short, short)
+    assert "base: the run has 10 steps, fewer than the 20 the check scores; pair its 20-step confirm run" in err
+    assert "make_run_yaml.py --benchmark --confirm" in err and "missing the training loss" not in err
     assert "base: no log at" in refused(None, ok)
     assert "win: no run YAML at" in refused(ok, ok, win_yaml=None)
     no_rollout = fixtures.train_log(args={"use_pytorch_profiler": "False"})

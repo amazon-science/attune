@@ -16,7 +16,7 @@ PYTHON_CLIS = ["skill/scripts/analyze_profile.py", "skill/scripts/calibration.py
                "skill/scripts/run_gpuh.py", "skill/scripts/workload.py", "skill/scripts/correctness/frozen_args.py",
                "skill/scripts/correctness/layer1.py", "skill/scripts/correctness/make_parity_arm.py",
                "skill/scripts/correctness/parity_verdict.py", "skill/scripts/correctness/pair_from_runs.py",
-               "skill/scripts/data/generate_fixed_sft.py",
+               "skill/scripts/data/analyze_token_distribution.py", "skill/scripts/data/generate_fixed_sft.py",
                "skill/scripts/data/patch_glm5_mask.py", "skill/scripts/data/verify_rows.py"]
 SHELL_CLIS = ["skill/scripts/poll_run.sh", "skill/scripts/read_metrics.sh", "skill/scripts/teardown_run.sh"]
 

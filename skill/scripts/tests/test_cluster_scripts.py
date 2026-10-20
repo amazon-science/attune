@@ -174,6 +174,9 @@ def test_poll_running_done_and_stuck(cluster, tmp_path):
     _log(exp, "alice-r3", last_step=5, last_age_s=7200)
     r, _ = _poll(cluster, tmp_path, "alice-r3", {"objects": {"rayjob/alice-r3": running()}})
     assert r["status"] == "stuck" and r["recommendation"] == "triage" and r["secs_since_last_perf"] >= 7200, r
+    _log(exp, "alice-r4", last_step=9, last_age_s=30)    # a 10-step campaign, before the argument dump is read
+    r, _ = _poll(cluster, tmp_path, "alice-r4", {"objects": {"rayjob/alice-r4": running()}}, AUTOTUNE_NUM_STEPS="10")
+    assert r["status"] == "done" and (r["target_step"], r["target_source"]) == (9, "workload"), r
 
 
 def test_poll_target_follows_the_runs_own_num_rollout(cluster, tmp_path):
@@ -244,6 +247,25 @@ def test_read_metrics_default_window(cluster, tmp_path):
     assert r["window"] == [5, 19] and r["window_n"] == 15 and r["aggregate_tok_per_s_per_gpu"] == 56.25
     p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=23), AUTOTUNE_NUM_GPUS="16")   # a profiled run
     assert p.returncode == 0 and r["window"] == [5, 19] and r["window_n"] == 15, p.stderr
+
+
+def test_read_metrics_short_runs(cluster, tmp_path):
+    """The window follows the operator's run length and start; a 20-step confirm run reads over the same window."""
+    short = dict(AUTOTUNE_NUM_GPUS="16", AUTOTUNE_NUM_STEPS="10")
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=10), **short)
+    assert p.returncode == 0 and r["valid"] and (r["window"], r["window_n"]) == ([5, 9], 5), p.stderr
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=20), **short)                  # its confirm run
+    assert p.returncode == 0 and r["valid"] and r["window"] == [5, 9] and r["latest_step"] == 19, p.stderr
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=10), AUTOTUNE_WINDOW_START="2", **short)
+    assert p.returncode == 0 and (r["window"], r["window_n"]) == ([2, 9], 8), p.stderr
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=9), **short)                   # one step short
+    assert p.returncode == 4 and "incomplete window" in r["invalid_reason"]
+
+
+def test_read_metrics_long_runs(cluster, tmp_path):
+    """Without window arguments a 30-step campaign is scored on its whole window, not the default 5-19."""
+    p, r, _ = _metrics(cluster, tmp_path, fixtures.train_log(steps=30), AUTOTUNE_NUM_GPUS="16", AUTOTUNE_NUM_STEPS="30")
+    assert p.returncode == 0 and r["valid"] and (r["window"], r["window_n"]) == ([5, 29], 25), p.stderr
 
 
 def test_read_metrics_reads_miles_timestamps(cluster, tmp_path):

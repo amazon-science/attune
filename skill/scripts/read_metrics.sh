@@ -7,7 +7,8 @@
 #   read_metrics.sh <train_log_path> [step_start] [step_end] [num_gpus]
 #
 # Defaults: step_start=$AUTOTUNE_WINDOW_START (5), step_end=N-1 for an N-step unprofiled run ($AUTOTUNE_NUM_STEPS,
-# default 20): the canonical fixed-shape window (discard the startup steps, measure the rest; see measurement.md).
+# default 20): the campaign's window, which the operator's settings define (discard the warm-up steps, measure the
+# rest; measurement.md §0). A profiled or confirm run is read over the same window.
 # num_gpus is REQUIRED: pass it as arg 4 or export $AUTOTUNE_NUM_GPUS (a wrong or absent denominator silently corrupts
 # the headline tok/s/GPU).
 # Primary metric is aggregate_tok_per_s_per_gpu = total_tokens / total_step_time / num_gpus across the window, the
@@ -24,9 +25,10 @@
 # Exit codes: 0 valid window; 2 usage; 3 no perf lines in the log; 4 invalid or incomplete window; 5 the log could
 # not be read (kubectl or file error).
 #
-# Examples (64 GPUs):
-#   read_metrics.sh <experiments_dir>/<run_id>/logs/<ts>/train.log 5 19 64   # through $AUTOTUNE_LOG_POD
-#   read_metrics.sh /tmp/train.log 5 19 64                                   # a local copy, with AUTOTUNE_LOG_POD unset
+# Examples:
+#   read_metrics.sh <experiments_dir>/<run_id>/logs/<ts>/train.log   # the campaign's window and GPU count, through
+#                                                                     # $AUTOTUNE_LOG_POD
+#   read_metrics.sh /tmp/train.log 5 19 64      # a local copy (AUTOTUNE_LOG_POD unset), steps 5-19 on 64 GPUs
 
 set -euo pipefail
 

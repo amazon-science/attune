@@ -1,10 +1,12 @@
-# Fixed-length SFT rows
+# SFT rows and token lengths
 
-ATTUNE ranks recipes on rows of exactly 8,192 tokens, built once per tokenizer from a pinned SFT dataset (the Tulu 3
-SFT mixture in the examples below). This directory holds what builds, checks and feeds those rows.
+By default ATTUNE ranks recipes on rows of exactly 8,192 tokens, built once per tokenizer from a pinned SFT dataset
+(the Tulu 3 SFT mixture in the examples below). This directory holds what builds, checks and feeds those rows, and
+the token-length analysis every campaign runs on its ranking dataset, whatever its shape.
 
 | File | Purpose |
 |---|---|
+| `analyze_token_distribution.py` | measures a dataset's token lengths and the micro-batches they imply, for `data_insights.md` |
 | `generate_fixed_sft.py` | builds the rows from the source Parquet shards and writes `<output>.manifest.json` beside them |
 | `patch_glm5_mask.py` | adds a glm5 loss mask to slime's `mask_utils.py`, in place; run it before a GLM-5.2 build |
 | `patch_gptoss_mask.py` | adds a gpt_oss (harmony) loss mask to slime's `mask_utils.py`, in place; run it before a gpt-oss build |
@@ -139,6 +141,37 @@ Put this directory on `PYTHONPATH` and pass these flags to slime:
 global dataset, so the command must not pass `--disable-rollout-global-dataset` (`make_run_yaml.py --benchmark`
 removes it). Every row must hold exactly `$AUTOTUNE_SEQ_LEN` tokens (default 8,192), the row length
 `make_run_yaml.py --benchmark` writes into the pod environment; the adapter refuses any other.
+
+## Token-length distribution
+
+`analyze_token_distribution.py` measures the ranking dataset in bootstrap (SKILL.md B1) and prints the summary the
+campaign keeps in `data_insights.md`: rows, total tokens, length percentiles, the share of rows and tokens in rows of
+at least 4K to 32K tokens, the supervised share, whether every row has the same length, and the regime. From the
+numbers it derives the tokens per GPU a micro-batch needs to hold the longest row at CP 1 to 8 (and its fp32 logits
+with `--vocab-size`), and for the run's first steps the tokens per step and the micro-batches slime's dynamic batching
+makes at each `--max-tokens-per-gpu`, aligned to DP, or to DP x the micro-batch group with virtual pipeline stages
+(`--pp`, `--vpp`). Pre-tokenized rows (`tokens` or `input_ids`, as a column or in `metadata` as the builder stores
+them) are counted exactly over the whole file; `messages` or `text` rows are rendered with a local tokenizer directory
+on a seeded sample, SFT `messages` with the recipe's `--loss-mask-type` to get the tokens slime trains on. The script
+reads only the dataset and the tokenizer and writes nothing, so it runs in a pod, reading itself from stdin. Run it in
+the baseline run's head pod, whose training image has pyarrow, transformers and slime and which mounts the dataset
+and the tokenizer:
+
+```bash
+kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" get pods -o name | grep '^pod/<baseline run_id>-.*-head-'
+kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" exec -i <head pod> -- \
+  python3 - <train.parquet> --gbs "${AUTOTUNE_GBS:-128}" --steps "${AUTOTUNE_NUM_STEPS:-20}" \
+  --dp <DP> --cp <CP> --max-tokens-per-gpu <mt> --vocab-size <vocab> --format json \
+  < analyze_token_distribution.py > token_distribution.json
+python3 analyze_token_distribution.py --render token_distribution.json
+```
+
+The log pod takes the same command when its Python has pyarrow (JSON Lines needs none). Otherwise read the file off it
+with `cat`, check the copy's sha256 against the dataset's manifest, or the `parquet_sha256` the launcher recorded
+(`dataset` in the campaign's `.attune/integrity.json`), and run the script on the copy where pyarrow is installed.
+
+For an RL prompt set, `--rl-prompts` renders the prompts with the generation prompt; their lengths are a lower bound,
+since training sees prompt + response.
 
 ## Limits
 

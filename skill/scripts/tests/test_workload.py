@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""workload.py step counts and the calibration file's measurement stamps. Run: python3 -m pytest skill/scripts/tests"""
+"""workload.py step counts, the calibration file's measurement stamps and the verdict band.
+Run: python3 -m pytest skill/scripts/tests"""
 import json
 import os
 import subprocess
@@ -11,9 +12,11 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(SCRIPTS / "correctness"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import calibration  # noqa: E402
 import fixtures  # noqa: E402
+import parity_verdict  # noqa: E402
 import workload  # noqa: E402
 
 
@@ -28,6 +31,7 @@ def env(monkeypatch):
 def test_default_layout(env):
     wl = workload.resolve()
     assert (wl["num_steps"], wl["window_start"], wl["window_end"], wl["target_step"]) == (20, 5, 19, 19)
+    assert wl["confirm_num_steps"] == 20 and workload.CHECK_STEPS == parity_verdict.STEPS
     pr = workload.profiled(wl)
     assert (pr["profile_setup_step"], pr["profile_warmup_step"], pr["profile_start"], pr["profile_end"]) == (20, 21, 22, 23)
     assert (pr["num_steps_profiled"], pr["target_step_profiled"]) == (23, 22)
@@ -46,8 +50,8 @@ def test_capture_bounds_and_minimum_steps(env, capsys):
     env.delenv("AUTOTUNE_PROFILE_CAPTURE")
     with pytest.raises(ValueError, match="outside 1..3"):
         workload.profiled(wl, 4)
-    env.setenv("AUTOTUNE_NUM_STEPS", "19")
-    with pytest.raises(ValueError, match="below the minimum 20"):
+    env.setenv("AUTOTUNE_NUM_STEPS", "7")       # window 5-6: fewer than 3 measured steps
+    with pytest.raises(ValueError, match="AUTOTUNE_NUM_STEPS=7 is below the minimum 8"):
         workload.resolve()
     env.delenv("AUTOTUNE_NUM_STEPS")
     env.setenv("AUTOTUNE_WINDOW_START", "25")   # window start past N-1 = 19 with N unset: the default is checked too
@@ -65,6 +69,23 @@ def test_capture_bounds_and_minimum_steps(env, capsys):
     wl = workload.resolve()
     assert wl["window_end"] == 29 and workload.profiled(wl)["profile_start"] == 32
     assert "AUTOTUNE_NUM_STEPS_PROFILED is no longer read" in capsys.readouterr().err
+
+
+def test_run_length_is_the_operators(env):
+    """Shorter and longer ranked runs keep the window START..N-1; a confirm run always holds the check's 20 steps."""
+    env.setenv("AUTOTUNE_NUM_STEPS", "8")       # the shortest run at the default window start: steps 5-7
+    wl = workload.resolve()
+    assert (wl["window_start"], wl["window_end"], wl["target_step"], wl["confirm_num_steps"]) == (5, 7, 7, 20)
+    env.setenv("AUTOTUNE_NUM_STEPS", "12")
+    env.setenv("AUTOTUNE_WINDOW_START", "2")
+    wl = workload.resolve()
+    assert (wl["num_steps"], wl["window_start"], wl["window_end"], wl["confirm_num_steps"]) == (12, 2, 11, 20)
+    pr = workload.profiled(wl)                  # the profiler still runs after the measured steps
+    assert (pr["profile_setup_step"], pr["profile_start"], pr["num_steps_profiled"]) == (12, 14, 15)
+    env.delenv("AUTOTUNE_WINDOW_START")
+    env.setenv("AUTOTUNE_NUM_STEPS", "30")      # longer runs are their own confirm length
+    wl = workload.resolve()
+    assert (wl["window_end"], wl["confirm_num_steps"]) == (29, 30)
 
 
 def test_cli_reports_a_bad_capture_without_failing(env):
@@ -144,3 +165,22 @@ def test_calibration_stamp_migrates_without_rewriting_history(env, tmp_path):
     g.write_text(json.dumps({k: v for k, v in _calibration().items() if k not in ("num_steps", "window")}))
     assert _cal("stamp", str(g), "--num-steps", "20", "--window", "5", "19").returncode == 0
     assert _cal(AUTOTUNE_CALIBRATION=str(g)).returncode == 0
+
+
+def test_the_band_is_the_operators(env, tmp_path):
+    p = _cal()
+    assert p.returncode == 0 and json.loads(p.stdout) == {"band": 0.03, "denominator": None,
+                                                          "source": "default (no calibration file)"}, p.stderr
+    p = _cal(AUTOTUNE_BAND="0.05")
+    assert p.returncode == 0 and json.loads(p.stdout)["band"] == 0.05, p.stderr
+    assert json.loads(p.stdout)["source"] == "AUTOTUNE_BAND (no calibration file)"
+    p = _cal(AUTOTUNE_BAND="0.01")              # used as given: only a calibration file's band is floored at 3%
+    assert p.returncode == 0 and json.loads(p.stdout)["band"] == 0.01, p.stderr
+    for bad in ("5", "0", "-0.01", "1", "nan", "five"):
+        p = _cal(AUTOTUNE_BAND=bad)
+        assert p.returncode == 1 and "AUTOTUNE_BAND=%r is not a fraction" % bad in p.stderr, (bad, p.stderr)
+    f = tmp_path / "cal.json"                   # a calibration file's band replaces it
+    f.write_text(json.dumps(_calibration(band=0.045)))
+    p = _cal(AUTOTUNE_CALIBRATION=str(f), AUTOTUNE_BAND="0.02")
+    assert p.returncode == 0 and json.loads(p.stdout)["band"] == 0.045, p.stderr
+    assert "the calibration file's band applies; AUTOTUNE_BAND=0.02 is not used" in p.stderr

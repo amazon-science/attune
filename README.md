@@ -32,14 +32,18 @@ On four models held out from its development, each starting from the strongest p
   set and the campaign passed its integrity check. A curation pass, run when the operator chooses, admits the few
   that are correct and general as one catalog change, checked by an independent reviewer agent and approved by a
   human (`harness/CURATION.md`).
-- **Measurement.** Every candidate runs the same fixed-shape workload for 20 steps, scored on steps 5 to 19, and
-  replaces the leader only if it beats it by more than the noise band.
+- **Measurement.** Every candidate runs the same workload, is scored over the same window, and replaces the leader
+  only if it beats it by more than the noise band. The operator sets the workload and the measurement: dataset and
+  batch, run length, the warm-up steps the score discards, and the band. The defaults are the benchmark the paper
+  uses to compare recipes across models: fixed 8,192-token rows at GBS 128, 20-step runs scored on steps 5 to 19, and
+  a 3% band (`skill/references/measurement.md` §0). The agent first measures the dataset's token-length distribution
+  (`skill/scripts/data/analyze_token_distribution.py`), which sizes micro-batches on variable-length data.
 - **Correctness.** A configuration check refuses changes to the training objective (data, batch, schedule, optimizer,
   loss, precision, token dropping, routing), known stack defects and same-math swaps whose component test failed,
   accepts layout, packing and tested same-math swaps, and lists every other change for human review. A paired
-  20-step run then requires finite losses and the candidate's step-0 loss within 5% of the baseline's;
-  Megatron-Bridge's `validate_convergence` on the loss curve is reported for review.
-  `skill/scripts/correctness/PROTOCOL.md` has the rules.
+  20-step run (the benchmark runs themselves when they have 20 steps or more) then requires finite losses and the
+  candidate's step-0 loss within 5% of the baseline's; Megatron-Bridge's `validate_convergence` on the loss curve is
+  reported for review. `skill/scripts/correctness/PROTOCOL.md` has the rules.
 - **Autonomy.** A Stop hook keeps the agent working until the budget is spent or it records a stop with evidence,
   and a ledger lets a crashed session resume. The launcher gives each campaign read-only copies of the skill and
   harness and records the hashes of the files a campaign must keep: the lever catalog, the scoring, measurement and
@@ -58,8 +62,9 @@ row-building tools in `skill/scripts/data/` also need pyarrow and transformers.
    `python3 -m pytest harness/tests skill/scripts/profile_analyzer/tests skill/scripts/tests`
 2. Copy `config.example.env` to `config.env`, fill in your cluster, storage, image and identity settings and a run
    prefix for this campaign (`ATTUNE_RUN_PREFIX=<user>-<tag>-`), and load it with `set -a; . config.env; set +a`.
-3. Prepare a working, untuned baseline recipe (`ATTUNE_BASELINE_YAML`), rows packed to the workload length
-   (`skill/scripts/data/` builds and checks them), and a pod that mounts the shared volume read-only to read run logs
+3. Prepare a working, untuned baseline recipe (`ATTUNE_BASELINE_YAML`), the ranking dataset (by default rows packed
+   to the workload length, which `skill/scripts/data/` builds and checks; set `AUTOTUNE_DATASET` and `AUTOTUNE_GBS`
+   to rank on your own data), and a pod that mounts the shared volume read-only to read run logs
    (`AUTOTUNE_LOG_POD`; `skill/references/measurement.md` §1).
 4. Class your stack's arguments in `skill/scripts/correctness/rules/numerics_list.yaml`; an unlisted argument is
    unknown, so layer 1 passes it and lists it for review. `rules/README.md` documents the formats.
@@ -91,7 +96,7 @@ skill/                  the skill
   references/             lever catalog, measurement, failure triage, ledger schema, topology check
   scripts/                launch, poll, metrics, teardown, GPU-hour accounting, profile analysis
     correctness/            the correctness gate
-    data/                   fixed-length SFT row builder, loss masks, rollout adapter
+    data/                   fixed-length SFT row builder, loss masks, rollout adapter, token-length analysis
     pod_hooks/              in-pod hook loader and registry
   past_tuning_projects/   campaign summaries the skill writes and reads
 harness/                unattended runner: launcher, integrity record, Stop and PreToolUse hooks, lesson export,
