@@ -15,21 +15,31 @@
 #   2. Copies $ATTUNE_HOME/skill and $ATTUNE_HOME/harness into the launcher's control directory
 #      <campaign_dir>/.attune, writes the campaign's settings there as config.env, and links the skill copy as
 #      <campaign_dir>/.claude/skills/autotune-training-throughput. The copies are read-only except
-#      skill/references/levers.md (lever rules are appended to it) and skill/past_tuning_projects/ (new summaries).
+#      skill/past_tuning_projects/ (new summaries); the lever catalog references/levers.md is read-only too, and the
+#      campaign proposes lessons in <project_folder>/LESSONS.md instead.
 #   3. Renders the copy's settings.template.json into <campaign_dir>/.claude/settings.json (the environment, the
 #      PreToolUse guard and Stop hook of the harness copy, the denied tools; WebSearch and WebFetch are denied only
 #      with AUTOTUNE_ALLOW_WEB=0) and the goal prompt (${VAR} placeholders filled) into goal_prompt.rendered.txt.
-#   4. Records the hashes of the protected files in .attune/integrity.json (harness/integrity.py seal), and the
+#   4. Records the hashes of the protected files in .attune/integrity.json (harness/integrity.py seal), the source
+#      tree with its git commit, whether it had uncommitted changes and the hashes of its skill/ and harness/, and the
 #      dataset's rows_sha256, read through the log pod: $AUTOTUNE_DATASET, else the baseline's --prompt-data (its
 #      $VAR and ${VAR} expanded from the settings), else $SFT_DATA. A changed or missing dataset fails the campaign
 #      at a later launch and before a recipe ships; a log pod that cannot be reached only holds them back.
 #   5. Runs `claude -p "<goal>"` in <campaign_dir> with only project/local settings, no MCP servers, no CLAUDE.md or
 #      auto memory, no bundled skills (the skill copy is the only one), and, when ATTUNE_MODEL is set, that model on
-#      every tier (main, subagents, Opus/Sonnet/Haiku/Fable defaults) with no fallback model.
+#      every tier (main, subagents, Opus/Sonnet/Haiku/Fable defaults) with no fallback model. The session's
+#      ATTUNE_HOME names the control directory, so a path built from it reaches the read-only copies, not the tree,
+#      and it does not see ATTUNE_LESSONS_INBOX.
 #   6. Checks the record again when the session ends; on a violation it tears down the runs in tracked_jobs.jsonl.
+#      It then warns of any change to the source tree's skill/ and harness/ since launch (integrity.py source-check),
+#      and, when the check passed, harness/lessons.py copies the campaign's LESSONS.md files to
+#      $ATTUNE_LESSONS_INBOX/<campaign id>/ with a manifest; unset, or after a failed check, the lessons stay in the
+#      campaign folder. The warning and a failed copy never change the session's status.
 # A later launch in the same directory (--session after an outage, or a new session) checks the record and the
 # dataset first, takes the settings from .attune/config.env (an environment value that disagrees is refused; an unset
-# or empty one takes the campaign's), keeps the copies, and re-renders and re-records the settings and prompts.
+# or empty one takes the campaign's), keeps the copies, and re-renders and re-records the settings and prompts and
+# the source tree's hashes. ATTUNE_LESSONS_INBOX must be absolute and outside the campaign directory and the ATTUNE
+# tree's skill/ and harness/.
 # Edit goal_prompt.txt and resume_prompt.txt only between sessions: during one, a change fails the campaign.
 # The Stop hook keeps the session going until the ledger holds $AUTOTUNE_BUDGET ranked results, or, when
 # $AUTOTUNE_GPUH_BUDGET is set, until that many GPU-hours are spent or the agent records a STOP row; it ends the
@@ -104,6 +114,11 @@ for v in AUTOTUNE_NUM_GPUS AUTOTUNE_BUDGET AUTOTUNE_MAX_STALL; do
 done
 [ -z "${AUTOTUNE_GPUH_BUDGET:-}" ] || is_number "$AUTOTUNE_GPUH_BUDGET" \
   || die "AUTOTUNE_GPUH_BUDGET must be a positive number of GPU-hours, not '$AUTOTUNE_GPUH_BUDGET'"
+if [ -n "${ATTUNE_LESSONS_INBOX:-}" ] && [ -f "$SRC/harness/lessons.py" ]; then   # older copies export nothing
+  python3 "$SRC/harness/lessons.py" check-inbox "$ATTUNE_LESSONS_INBOX" "$CAMPAIGN_DIR" "$ATTUNE_HOME" \
+    || die "ATTUNE_LESSONS_INBOX must be an absolute path outside the campaign directory and the ATTUNE tree's" \
+           "skill/ and harness/ (above)"
+fi
 case "${AUTOTUNE_ALLOW_WEB:-}" in
   ""|0|1) export AUTOTUNE_ALLOW_WEB="${AUTOTUNE_ALLOW_WEB:-1}" ;;   # unset or empty: on, recorded as 1
   *) die "AUTOTUNE_ALLOW_WEB is 0 (web access off) or 1 or unset (on), not '$AUTOTUNE_ALLOW_WEB'" ;;
@@ -231,8 +246,8 @@ PY
 if [ "$FIRST" = 1 ]; then
   set -a; . "$CONTROL/config.env"; set +a
   chmod -R a-w "$CONTROL/skill" "$CONTROL/harness" "$CONTROL/config.env"
-  chmod u+w "$CONTROL/skill/references/levers.md" "$CONTROL/skill/past_tuning_projects"
-  python3 "$CONTROL/harness/integrity.py" seal "$CONTROL" --dataset "$DATASET"
+  chmod u+w "$CONTROL/skill/past_tuning_projects"
+  python3 "$CONTROL/harness/integrity.py" seal "$CONTROL" --dataset "$DATASET" --source "$ATTUNE_HOME"
   chmod a-w "$CONTROL"
   trap - ERR
 else
@@ -261,13 +276,29 @@ if [ -n "$SESSION" ]; then   # the same session, its context intact; resume_prom
     PROMPT="Continue the campaign from where it stopped."
   fi
 fi
-RUN=(env AUTOTUNE_AUTONOMOUS=1 "$CLAUDE_BIN" -p "$PROMPT" "${FLAGS[@]}")
+RUN=(env -u ATTUNE_LESSONS_INBOX ATTUNE_HOME="$CONTROL" AUTOTUNE_AUTONOMOUS=1 "$CLAUDE_BIN" -p "$PROMPT" "${FLAGS[@]}")
+# The steps after the session-end integrity check ($1: its exit status); a campaign sealed before the lessons export
+# has neither.
+after_session() {
+  [ -f "$ATTUNE_CONTROL_DIR/harness/lessons.py" ] || return 0
+  python3 "$ATTUNE_CONTROL_DIR/harness/integrity.py" source-check "$ATTUNE_CONTROL_DIR" \
+    --where "launch_campaign.sh (session end)" \
+    || echo "WARNING: the source tree was not checked (above); the session status is unaffected" >&2
+  if [ "$1" = 0 ]; then
+    python3 "$ATTUNE_CONTROL_DIR/harness/lessons.py" export "$ATTUNE_CONTROL_DIR" \
+      || echo "WARNING: the lessons were not exported (above); the session status is unaffected" >&2
+  else
+    echo "lessons: not exported, the campaign failed its integrity check; they stay in $CAMPAIGN_DIR/<project_folder>/"
+  fi
+}
 if [ -n "$SESSION" ] && [ -e run.out ]; then mv run.out "run.out.before-resume-$(date -u +%Y%m%dT%H%M%SZ)"; fi
 if [ "$DETACH" = 1 ]; then   # the detached session checks the record when it ends and writes its status to run.exit
   rm -f run.exit
-  setsid bash -c '"$@" > run.out 2>&1 < /dev/null; rc=$?
+  setsid bash -c "$(declare -f after_session)"'
+"$@" > run.out 2>&1 < /dev/null; rc=$?; intact=0
 python3 "$ATTUNE_CONTROL_DIR/harness/integrity.py" check "$ATTUNE_CONTROL_DIR" \
-  --where "launch_campaign.sh (session end)" --teardown > run.exit 2>&1 || rc=3
+  --where "launch_campaign.sh (session end)" --teardown > run.exit 2>&1 || { rc=3; intact=3; }
+after_session "$intact" >> run.exit 2>&1
 echo "exit $rc" >> run.exit
 exit $rc' attune-session "${RUN[@]}" > /dev/null 2>&1 < /dev/null &
   echo "[launch_campaign] detached (pid $!); output -> $CAMPAIGN_DIR/run.out, status -> $CAMPAIGN_DIR/run.exit"
@@ -278,7 +309,10 @@ set +e
 rc=$?
 set -e
 echo "[launch_campaign] session ended (exit $rc); output -> $CAMPAIGN_DIR/run.out"
+intact=0
 python3 "$CONTROL/harness/integrity.py" check "$CONTROL" --where "launch_campaign.sh (session end)" --teardown \
-  || failed "the campaign failed its integrity check ($VIOLATION): no recipe ships (the teardown of its tracked runs" \
-            "is above and in the record)"
+  || intact=$?
+after_session "$intact"
+[ "$intact" = 0 ] || failed "the campaign failed its integrity check ($VIOLATION): no recipe ships (the teardown of" \
+                            "its tracked runs is above and in the record)"
 exit "$rc"

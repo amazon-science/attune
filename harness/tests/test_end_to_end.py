@@ -7,12 +7,12 @@ The launcher sets the campaign up (copies, config.env, integrity record, dataset
 once. Each step after that is a tool call the skill leads the agent to make: the campaign's PreToolUse hook, run
 through its subprocess entry point, must allow it, and a Bash command then runs for real in the campaign directory
 with the campaign's settings, from the campaign's copy of the skill (Write and Edit are applied by the test). The
-steps include a heredoc, a multi-line command, edits to RESULTS.md and the lever catalog, and a relaunch from an
-environment with an empty AUTOTUNE_GPUH_LOG. The fake kubectl records every call, keeps applied RayJobs and ConfigMaps
-in a state file (every RayJob has already succeeded), answers for a log pod that mounts the shared volume read-only,
-and runs `exec <log pod> -- <cmd>` locally, so the test's files play the shared volume. The Stop hook blocks until
-the agent's STOP row. A changed dataset at the end fails the campaign before shipping, tears down the live run, and
-then fails it at the Stop hook and at ledger_append.py too.
+steps include a heredoc, a multi-line command, edits to RESULTS.md and LESSONS.md (the read-only lever catalog refuses
+them), and a relaunch from an environment with an empty AUTOTUNE_GPUH_LOG. The fake kubectl records every call, keeps
+applied RayJobs and ConfigMaps in a state file (every RayJob has already succeeded), answers for a log pod that
+mounts the shared volume read-only, and runs `exec <log pod> -- <cmd>` locally, so the test's files play the shared
+volume. The Stop hook blocks until the agent's STOP row. A changed dataset at the end fails the campaign before
+shipping, tears down the live run, and then fails it at the Stop hook and at ledger_append.py too.
 Run: python3 -m pytest harness/tests"""
 import importlib.util
 import json
@@ -218,8 +218,10 @@ def test_one_campaign_through_the_documented_loop(campaign):
     edit("proj-h100/RESULTS.md", "| base | 37.5 |\n", "| base | 37.5 |\n| tp1 | 37.5 (tie) |\n")
     levers = ".claude/skills/autotune-training-throughput/references/levers.md"
     last = (root / levers).read_text().splitlines(keepends=True)[-1]
-    edit(levers, last, last + "- TP1 at this size ties TP2 when attention TP traffic is already overlapped.\n")
-    assert tool("Edit", file_path=levers, old_string="# ", new_string="# (edited) ") == "deny"
+    assert tool("Edit", file_path=levers, old_string=last, new_string=last + "- a lesson\n") == "deny"
+    lesson = "## TP1 ties TP2 when attention TP traffic is already overlapped\n- Evidence: alice-tune-proj-h100-tp1\n"
+    write("proj-h100/LESSONS.md", lesson)
+    edit("proj-h100/LESSONS.md", lesson, lesson + "- Conflicts: none\n")
     out = stop_gate()
     assert "Campaign not converged" in out and "24.0/100 GPU-h spent, 1 ranked results" in out, out
 

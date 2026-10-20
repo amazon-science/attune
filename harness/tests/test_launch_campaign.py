@@ -1,12 +1,18 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""launch_campaign.sh with a fake claude and kubectl: it refuses a shared run prefix and a writable log pod, makes the
-campaign's read-only copies, config.env and integrity record (with the dataset's hash), renders and records the web
-switch, holds a later launch to the campaign's settings, relaunches from config.example.env, and exits 3 once the
-campaign fails its integrity check, after tearing down its tracked runs.
+"""launch_campaign.sh with a fake claude and kubectl: it refuses a shared run prefix, a writable log pod and an inbox
+inside the campaign or the tree's skill/ and harness/, makes the campaign's read-only copies (the lever catalog among
+them), config.env (with the manifest's model, GPU, image and framework) and integrity record (with the dataset's hash
+and the source tree), gives the session an ATTUNE_HOME that names the copies and no lessons inbox, renders and records
+the web switch, holds a later launch to the campaign's settings, relaunches from config.example.env, warns at session
+end of a write into the tree, copies LESSONS.md to the inbox at session end (or says it stays), and exits 3 once the
+campaign fails its integrity check, after tearing down its tracked runs and without exporting its lessons, even when
+the violation record cannot be written.
 Run: python3 -m pytest harness/tests"""
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -55,30 +61,40 @@ FAKE_CLAUDE = '''#!@PYTHON@
 import json, os, sys
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as f:
     f.write(json.dumps({"args": sys.argv[1:], "autonomous": os.environ.get("AUTOTUNE_AUTONOMOUS"),
-                        "control": os.environ.get("ATTUNE_CONTROL_DIR")}) + "\\n")
+                        "control": os.environ.get("ATTUNE_CONTROL_DIR"), "home": os.environ.get("ATTUNE_HOME"),
+                        "inbox": os.environ.get("ATTUNE_LESSONS_INBOX")}) + "\\n")
 action = os.environ.get("FAKE_CLAUDE_ACTION", "")
 skill = os.path.join(os.environ["ATTUNE_CONTROL_DIR"], "skill")
 os.makedirs("proj", exist_ok=True)
-if action in ("append", "tamper"):
+if action in ("append", "tamper", "tamper-unrecorded"):
     with open("proj/tracked_jobs.jsonl", "a") as f:
         f.write('{"run_id": "alice-tune-r1", "target_steps": 19}\\n')
+    with open("proj/LESSONS.md", "a") as f:
+        f.write("## TP1 ties TP2 here\\n- Claim: ...\\n")
 if action == "append":
     with open("proj/AUTOTUNE_LEDGER.jsonl", "a") as f:
         f.write('{"run_id": "alice-tune-base", "kind": "baseline", "status": "completed"}\\n')
-    with open(os.path.join(skill, "references", "levers.md"), "a") as f:
-        f.write("- a lever rule\\n")
     with open(os.path.join(skill, "past_tuning_projects", "proj_c1_summary.md"), "w") as f:
         f.write("# proj\\n")
-elif action == "write-copy":
+elif action == "write-tree":   # a Bash heredoc into the tree the campaign was copied from
+    with open(os.path.join(os.environ["FAKE_TREE"], "skill", "references", "levers.md"), "a") as f:
+        f.write("- a rule\\n")
+elif action in ("write-copy", "write-home"):
+    path = (os.path.join(skill, "scripts", "read_metrics.sh") if action == "write-copy" else
+            os.path.join(os.environ["ATTUNE_HOME"], "skill", "references", "levers.md"))
     try:
-        open(os.path.join(skill, "scripts", "read_metrics.sh"), "a").write("# tuned\\n")
+        open(path, "a").write("# tuned\\n")
     except PermissionError:
         sys.exit(0)
-    sys.exit("the copy was writable")
-elif action == "tamper":
+    sys.exit("%s was writable" % path)
+elif action in ("tamper", "tamper-unrecorded"):
     path = os.path.join(skill, "scripts", "read_metrics.sh")
     os.chmod(path, 0o644)
     open(path, "a").write("# tuned\\n")
+    if action == "tamper-unrecorded":   # the violation record cannot be written
+        control = os.environ["ATTUNE_CONTROL_DIR"]
+        os.chmod(control, 0o755)
+        os.mkdir(os.path.join(control, "integrity_violation.json.tmp"))
 '''
 RUN_OBJECT = {"metadata": {"name": "alice-tune-r1", "labels": {"owner": "alice"}}}
 
@@ -128,13 +144,14 @@ def test_a_first_launch_makes_a_sealed_campaign(launch):
     assert not os.access(skill / "scripts" / "read_metrics.sh", os.W_OK)
     assert not os.access(skill / "scripts", os.W_OK) and not os.access(control / "harness", os.W_OK)
     assert not os.access(control, os.W_OK) and not os.access(control / "config.env", os.W_OK)
-    assert os.access(skill / "references" / "levers.md", os.W_OK)
+    assert not os.access(skill / "references" / "levers.md", os.W_OK)
     assert os.access(skill / "past_tuning_projects", os.W_OK)
     assert not list(control.rglob("__pycache__"))
     assert (campaign / ".claude" / "skills" / "autotune-training-throughput").resolve() == skill
     config = (control / "config.env").read_text().splitlines()
     for line in ("ATTUNE_RUN_PREFIX=alice-tune-", "KUBECTL_NS=ns", "AUTOTUNE_GPUH_BUDGET=''",
-                 "AUTOTUNE_ALLOW_WEB=1", f"CAMPAIGN_DIR={campaign}", f"ATTUNE_CONTROL_DIR={control}"):
+                 "AUTOTUNE_ALLOW_WEB=1", f"CAMPAIGN_DIR={campaign}", f"ATTUNE_CONTROL_DIR={control}",
+                 "ATTUNE_MODEL_NAME=m", "ATTUNE_GPU_NAME=H100", "TRAINING_IMAGE=img@sha256:0", "ATTUNE_FRAMEWORK=''"):
         assert line in config, line
     assert any(x.startswith("ATTUNE_CAMPAIGN_ID=alice-tune-2") for x in config)
     settings = json.loads((campaign / ".claude" / "settings.json").read_text())
@@ -143,9 +160,13 @@ def test_a_first_launch_makes_a_sealed_campaign(launch):
     assert "WebSearch" not in settings["permissions"]["deny"], "web access is on by default"
     (call,) = launch.calls()
     assert call["autonomous"] == "1" and call["control"] == str(control)
+    assert call["home"] == str(control) and call["inbox"] is None
     assert "--disallowedTools" not in call["args"]
     record = json.loads((control / "integrity.json").read_text())
     assert str(skill / "scripts" / "read_metrics.sh") in record["files"]
+    assert str(skill / "references" / "levers.md") in record["files"] and record["source"] == str(REPO)
+    assert "skill/references/levers.md" in record["source_files"] and "harness/lessons.py" in record["source_files"]
+    assert "lessons: none written" in p.stdout and "unchanged since launch" in p.stdout
     assert record["dataset"]["path"] == str(launch.dataset) and len(record["dataset"]["parquet_sha256"]) == 64
 
 
@@ -165,13 +186,42 @@ def test_web_access_off(launch):
     ({"ATTUNE_RUN_PREFIX": "alice-"}, "campaign-specific"), ({"ATTUNE_RUN_PREFIX": "alice"}, "campaign-specific"),
     ({"ATTUNE_RUN_PREFIX": "tune-"}, "campaign-specific"), ({"ATTUNE_RUN_PREFIX": "Alice-Tune-"}, "campaign-specific"),
     ({"ATTUNE_RUN_PREFIX": ""}, "ATTUNE_RUN_PREFIX is not set"), ({"FAKE_POD_READ_ONLY": "0"}, "readOnly: true"),
-    ({"AUTOTUNE_ALLOW_WEB": "yes"}, "AUTOTUNE_ALLOW_WEB"),
+    ({"AUTOTUNE_ALLOW_WEB": "yes"}, "AUTOTUNE_ALLOW_WEB"), ({"ATTUNE_LESSONS_INBOX": "inbox"}, "absolute path"),
     ({"AUTOTUNE_DATASET": "/no/such/file.parquet"}, "finds no dataset at /no/such/file.parquet"),
     ({"AUTOTUNE_DATASET": "", "SFT_DATA": "", "ATTUNE_BASELINE_YAML": "/x.yaml"}, "no dataset")])
 def test_refusals(launch, env, message):
     p = launch(**env)
     assert p.returncode == 2 and message in p.stderr, p.stderr
     assert not launch.control.exists() and not launch.calls()
+
+
+def _tree(launch, drop=()):
+    """A copy of this repository's skill/ and harness/ to launch from (`drop`: files left out)."""
+    tree = launch.tmp / "tree"
+    for d in ("skill", "harness"):
+        shutil.copytree(REPO / d, tree / d, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
+    for rel in drop:
+        (tree / rel).unlink()
+    return tree
+
+
+@pytest.mark.parametrize("where", ["campaign", "inside", "linked", "skill", "harness"])
+def test_an_inbox_in_the_campaign_or_the_trees_skill_or_harness_is_refused(launch, where):
+    tree = _tree(launch)
+    launch.campaign.mkdir()
+    (launch.tmp / "link").symlink_to(launch.campaign)
+    inbox = {"campaign": launch.campaign, "inside": launch.campaign / "proj", "linked": launch.tmp / "link" / "x",
+             "skill": tree / "skill" / "inbox", "harness": tree / "harness"}[where]
+    p = launch(ATTUNE_HOME=str(tree), ATTUNE_LESSONS_INBOX=str(inbox))
+    assert p.returncode == 2 and "outside the campaign directory" in p.stderr and "refused" in p.stderr, p.stderr
+    assert not launch.control.exists() and not launch.calls()
+
+
+def test_a_later_launch_refuses_an_inbox_inside_the_campaign(launch):
+    assert launch().returncode == 0
+    p = launch("--session", "abc", ATTUNE_LESSONS_INBOX=str(launch.campaign / "inbox"))
+    assert p.returncode == 2 and "refused" in p.stderr, p.stderr
+    assert len(launch.calls()) == 1
 
 
 def test_the_dataset_comes_from_the_baseline_when_unset(launch):
@@ -234,11 +284,107 @@ def test_the_copies_refuse_accidental_writes(launch):
     assert p.returncode == 0, p.stderr
 
 
+def test_the_sessions_attune_home_reaches_the_copy_not_the_tree(launch):
+    tree = launch.tmp / "tree"
+    for d in ("skill", "harness"):
+        shutil.copytree(REPO / d, tree / d, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
+    levers = tree / "skill" / "references" / "levers.md"
+    before = levers.read_bytes()
+    p = launch(FAKE_CLAUDE_ACTION="write-home", ATTUNE_HOME=str(tree))
+    assert p.returncode == 0, p.stderr   # the session's $ATTUNE_HOME/skill is the read-only copy
+    assert launch.calls()[0]["home"] == str(launch.control) and levers.read_bytes() == before
+    assert json.loads((launch.control / "integrity.json").read_text())["source"] == str(tree)
+
+
+def _campaign_id(launch):
+    lines = (launch.control / "config.env").read_text().splitlines()
+    (line,) = [x for x in lines if x.startswith("ATTUNE_CAMPAIGN_ID=")]
+    return line.split("=", 1)[1]
+
+
+def test_lessons_go_to_the_inbox_at_session_end(launch):
+    inbox = launch.tmp / "inbox"
+    p = launch(FAKE_CLAUDE_ACTION="append", ATTUNE_LESSONS_INBOX=str(inbox), ATTUNE_FRAMEWORK="slime 0.3")
+    assert p.returncode == 0, p.stderr
+    assert launch.calls()[0]["inbox"] is None, "the session does not see the inbox"
+    cid, lessons = _campaign_id(launch), launch.campaign / "proj" / "LESSONS.md"
+    out = inbox / cid
+    assert (out / "proj" / "LESSONS.md").read_bytes() == lessons.read_bytes() and "lessons: exported" in p.stdout
+    manifest = json.loads((out / "manifest.json").read_text())
+    record = json.loads((launch.control / "integrity.json").read_text())
+    levers = launch.control / "skill" / "references" / "levers.md"
+    version = {"levers_sha256": hashlib.sha256(levers.read_bytes()).hexdigest(), "commit": record["source_commit"],
+               "dirty": record["source_dirty"]}
+    assert manifest["catalog_version"] == version
+    assert (manifest["campaign_id"], manifest["model"], manifest["gpu"], manifest["framework"], manifest["image"]) == (
+        cid, "m", "H100", "slime 0.3", "img@sha256:0")
+    assert manifest["lessons"] == [{"folder": "proj", "source": str(lessons),
+                                    "sha256": hashlib.sha256(lessons.read_bytes()).hexdigest()}]
+    assert manifest["campaign_dir"] == str(launch.campaign)
+    with open(lessons, "a") as f:   # a later session, from a shell without the four settings, replaces the copy
+        f.write("## another\n")
+    p = launch("--session", "abc", ATTUNE_LESSONS_INBOX=str(inbox),
+               unset=("ATTUNE_MODEL_NAME", "ATTUNE_GPU_NAME", "TRAINING_IMAGE"))
+    assert p.returncode == 0, p.stderr
+    assert (out / "proj" / "LESSONS.md").read_bytes() == lessons.read_bytes()
+    later = json.loads((out / "manifest.json").read_text())
+    assert (later["model"], later["gpu"], later["framework"], later["image"], later["catalog_version"]) == (
+        "m", "H100", "slime 0.3", "img@sha256:0", version)
+    p = launch("--session", "abc", ATTUNE_FRAMEWORK="slime 0.4")   # a different value is refused
+    assert p.returncode == 2 and "ATTUNE_FRAMEWORK" in p.stderr, p.stderr
+
+
+def test_lessons_stay_in_the_campaign_without_an_inbox(launch):
+    p = launch(FAKE_CLAUDE_ACTION="append")
+    assert p.returncode == 0, p.stderr
+    assert "ATTUNE_LESSONS_INBOX is unset, so they stay in the campaign folder" in p.stdout
+
+
+def test_a_failed_copy_does_not_fail_the_session(launch):
+    blocked = launch.tmp / "not-a-directory"
+    blocked.write_text("")
+    p = launch(FAKE_CLAUDE_ACTION="append", ATTUNE_LESSONS_INBOX=str(blocked))
+    assert p.returncode == 0 and "lessons: not exported" in p.stderr and "WARNING" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_a_write_into_the_tree_is_reported_at_session_end(launch, detach):
+    tree = _tree(launch)
+    p = launch(*(["--detach"] if detach else []), ATTUNE_HOME=str(tree), FAKE_TREE=str(tree),
+               FAKE_CLAUDE_ACTION="write-tree")
+    assert p.returncode == 0, p.stderr
+    out = _status(launch) if detach else p.stderr
+    assert "WARNING: the source tree %s changed" % tree in out and "skill/references/levers.md: modified" in out, out
+    if detach:
+        assert out.splitlines()[-1] == "exit 0"
+    record = json.loads((launch.control / "integrity.json").read_text())
+    assert record["source_checks"][-1]["changes"] == [{"path": "skill/references/levers.md", "problem": "modified"}]
+    assert not (launch.control / "integrity_violation.json").exists()
+
+
+def test_a_campaign_without_the_lessons_export_skips_both_steps(launch):
+    tree = _tree(launch, drop=("harness/lessons.py",))
+    p = launch(ATTUNE_HOME=str(tree), ATTUNE_LESSONS_INBOX=str(launch.campaign))
+    assert p.returncode == 0, p.stderr
+    assert "lessons" not in p.stdout + p.stderr and "source tree" not in p.stdout + p.stderr
+
+
+def test_the_export_follows_the_checks_result_not_the_violation_record(launch):
+    inbox = launch.tmp / "inbox"
+    p = launch(FAKE_CLAUDE_ACTION="tamper-unrecorded", ATTUNE_LESSONS_INBOX=str(inbox))
+    assert p.returncode == 3 and "could not be written" in p.stderr, p.stderr
+    assert not (launch.control / "integrity_violation.json").exists()
+    assert (launch.campaign / "proj" / "LESSONS.md").exists()
+    assert "lessons: not exported, the campaign failed its integrity check" in p.stdout and not inbox.exists()
+
+
 def test_a_tampered_campaign_tears_down_and_exits_3_now_and_later(launch):
     launch.objects({"rayjob/alice-tune-r1": RUN_OBJECT})
-    p = launch(FAKE_CLAUDE_ACTION="tamper")
+    inbox = launch.tmp / "inbox"
+    p = launch(FAKE_CLAUDE_ACTION="tamper", ATTUNE_LESSONS_INBOX=str(inbox))
     assert p.returncode == 3 and "integrity" in p.stderr and "live runs torn down: alice-tune-r1" in p.stderr, \
         p.stderr
+    assert "not exported, the campaign failed its integrity check" in p.stdout and not inbox.exists()
     violation = json.loads((launch.control / "integrity_violation.json").read_text())
     assert violation["where"] == "launch_campaign.sh (session end)"
     assert violation["violations"][0]["path"].endswith("scripts/read_metrics.sh")
@@ -283,17 +429,28 @@ def test_an_unreachable_log_pod_holds_a_later_launch_without_failing_it(launch):
     assert launch("--session", "abc").returncode == 0
 
 
-@pytest.mark.parametrize("action,status", [("append", "exit 0"), ("tamper", "exit 3")])
-def test_a_detached_session_writes_its_status(launch, action, status):
-    launch.objects({"rayjob/alice-tune-r1": RUN_OBJECT})
-    p = launch("--detach", FAKE_CLAUDE_ACTION=action)
-    assert p.returncode == 0 and "detached" in p.stdout, p.stderr
+def _status(launch):
+    """run.exit once the detached session has written its status."""
     exit_file = launch.campaign / "run.exit"
     for _ in range(400):
         if exit_file.exists() and "exit " in exit_file.read_text():
             break
         time.sleep(0.05)
-    text = exit_file.read_text()
+    return exit_file.read_text()
+
+
+@pytest.mark.parametrize("action,status", [("append", "exit 0"), ("tamper", "exit 3"),
+                                           ("tamper-unrecorded", "exit 3")])
+def test_a_detached_session_writes_its_status(launch, action, status):
+    launch.objects({"rayjob/alice-tune-r1": RUN_OBJECT})
+    inbox = launch.tmp / "inbox"
+    p = launch("--detach", FAKE_CLAUDE_ACTION=action, ATTUNE_LESSONS_INBOX=str(inbox))
+    assert p.returncode == 0 and "detached" in p.stdout, p.stderr
+    text = _status(launch)
     assert text.splitlines()[-1] == status
-    if status == "exit 3":
+    assert (inbox / _campaign_id(launch) / "proj" / "LESSONS.md").exists() == (status == "exit 0"), text
+    assert "unchanged since launch" in text
+    if action == "tamper":
         assert "live runs torn down: alice-tune-r1" in text
+    if status == "exit 3":
+        assert "lessons: not exported, the campaign failed its integrity check" in text

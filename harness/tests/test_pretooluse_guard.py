@@ -1,7 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 """The PreToolUse hook fails closed, applies the kubectl and web rules to Bash, refuses edits of protected campaign
-files, keeps append-only files append-only, answers questions with defaults, and starts under Python 3.7.
+files (the lever catalog among them) and of the tree the campaign was copied from, keeps append-only files
+append-only, lets the agent write its LESSONS.md, answers questions with defaults, and starts under Python 3.7.
 Run: python3 -m pytest harness/tests"""
 import ast
 import json
@@ -15,6 +16,7 @@ import pytest
 
 import command_guard
 import pretooluse_guard as hook
+from conftest import seal_campaign
 
 HARNESS = Path(hook.__file__).resolve().parents[1]
 HOOK_MODULES = [HARNESS / "hooks" / "pretooluse_guard.py", HARNESS / "hooks" / "stop_gate.py",
@@ -83,17 +85,41 @@ def test_protected_files_are_refused(active):
 
 
 def test_the_agents_own_files_are_free(active):
-    for path in ("proj/RESULTS.md", "proj/notes.md", f"{active.root}/proj/aid.py", "/tmp/scratch.txt"):
+    for path in ("proj/RESULTS.md", "proj/LESSONS.md", "proj/notes.md", f"{active.root}/proj/aid.py",
+                 "/tmp/scratch.txt"):
         assert _decision(_call("Write", active.root, file_path=path, content="x")) == "allow", path
     assert _decision(_call("MultiEdit", active.root, file_path="proj/notes.md", edits=[])) == "allow"
 
 
-@pytest.mark.parametrize("which", ["ledger", "gpuh", "levers"])
+def test_the_lever_catalog_takes_no_edit_not_even_an_append(active):
+    linked = ".claude/skills/autotune-training-throughput"
+    (active.root / linked).symlink_to(active.skill)
+    for path in (str(active.skill / "references" / "levers.md"), f"{linked}/references/levers.md"):
+        old = (active.skill / "references" / "levers.md").read_text()
+        out = _call("Write", active.root, file_path=path, content=old + "- a new rule\n")
+        assert _decision(out) == "deny" and "LESSONS.md" in out, path
+        last = old.splitlines(keepends=True)[-1]
+        out = _call("Edit", active.root, file_path=path, old_string=last, new_string=last + "- a new rule\n")
+        assert _decision(out) == "deny", path
+
+
+def test_the_tree_the_campaign_was_copied_from_is_refused(campaign, monkeypatch):
+    tree = campaign.tmp / "tree"
+    (tree / "skill" / "references").mkdir(parents=True)
+    (tree / "skill" / "references" / "levers.md").write_text("# levers\n")
+    control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root)}, source=str(tree))
+    monkeypatch.setenv("ATTUNE_CONTROL_DIR", str(control))
+    monkeypatch.setenv("AUTOTUNE_AUTONOMOUS", "1")
+    out = _call("Write", campaign.root, file_path=str(tree / "skill" / "references" / "levers.md"),
+                content="# levers\n- a rule\n")
+    assert _decision(out) == "deny" and "copied from" in out
+    assert _decision(_call("Write", campaign.root, file_path="proj/LESSONS.md", content="## a\n")) == "allow"
+
+
+@pytest.mark.parametrize("which", ["ledger", "gpuh"])
 def test_append_only_files_take_only_appends(active, which):
-    path = {"ledger": active.ledger, "gpuh": active.root / "gpuh.jsonl",
-            "levers": active.skill / "references" / "levers.md"}[which]
-    if which != "levers":
-        path.write_text('{"run_id": "a"}\n')
+    path = {"ledger": active.ledger, "gpuh": active.root / "gpuh.jsonl"}[which]
+    path.write_text('{"run_id": "a"}\n')
     old = path.read_text()
 
     def decide(tool, **args):

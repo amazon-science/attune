@@ -26,7 +26,7 @@ If none of the patterns match, follow "What to do if triage doesn't match any pa
 - **Step 1 OOM** (first training step, not model load) → persistent memory + first peak transient (activations + AllGather buffers).
   - Fix: (1) drop `max-tokens-per-gpu`, (2) if already small, raise PP, (3) add `--recompute-granularity full --recompute-method uniform --recompute-num-layers 1`.
 - **Step 2–5 OOM** → peak transient memory too big or variable-length spike.
-  - Fix: (1) drop `max-tokens-per-gpu` by 25%, (2) swap `selective` → `full uniform` recompute.
+  - Fix: (1) drop `max-tokens-per-gpu`, (2) swap `selective` → `full uniform` recompute.
 - **Step 10+ OOM** → memory fragmentation or variable-seq-length pathology.
   - Fix: set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` via env. If still fails, drop `max-tokens-per-gpu`.
 
@@ -176,8 +176,6 @@ If the config truly matches a known-good baseline and it still hangs, enable Fli
 3. Grep for `Error|Traceback|AssertionError|KeyError|TypeError|RuntimeError|OOM|RayTaskError` — short-duration SUCCEEDEDs virtually always have one.
 4. If found, reclassify as `errored`, triage per the matching pattern below, and tear down (`teardown_run.sh <run_id>`).
 
-**Known trigger on this stack:** PP=2 with very high vpp (e.g. `--num-layers-per-virtual-pipeline-stage` giving 12 virtual stages per rank). The config passes init but crashes inside slime's actor with `KeyError: Float16Module` + `cannot pickle 'ReloadableProcessGroup'`. Smoke-test any high-vpp PP=2 config before ranking it.
-
 ### MoE expert-parallel overlap is incompatible with `recompute=full`
 
 **Pattern:** `AssertionError: disable full recomputation when enabling overlap_moe_expert_parallel_comm`.
@@ -285,7 +283,7 @@ If `microbatches_per_rank < PP`, the schedule can't fill the pipeline and Megatr
 
 **Cause:** Megatron-LM's torch-FSDP2 path mutually excludes pipeline parallelism. This is a framework constraint, not a bug; asserted in `megatron/training/arguments.py`.
 
-**Fix:** if you want FSDP2, you must drop to PP=1. On large MoE over EFA, PP=1 pushes EP and DP collectives cross-node (`EP = world/PP`, levers.md §b), so FSDP2 is rarely viable. Retest only after PP=1 becomes viable on some new topology.
+**Fix:** if you want FSDP2, you must drop to PP=1. On large MoE over EFA, PP=1 puts every layer on each rank and raises DP, which takes EP cross-node unless EDP > 1 holds it (levers.md §b), so FSDP2 is rarely viable. Retest only after PP=1 becomes viable on some new topology.
 
 ## Pattern: `ValueError: Not enough samples N for global_batch_size M` (slime SFT)
 
@@ -305,7 +303,7 @@ A big step_time_max with a tight p50 looks like a rollout stall but usually isn'
 
 **Pattern:** `AssertionError: Must use --overlap-param-gather with --overlap-grad-reduce` at Megatron init.
 
-**Cause:** Megatron asserts both flags together. Can't ship one alone. Both also trip slime's `no_sync_func` assert (see "Assertion: config.no_sync_func must be None") unless the image carries a fix — and a runtime sed in `run-training.sh` only patches the submitter pod, not the Ray actors.
+**Cause:** Megatron asserts both flags together. Can't ship one alone. Both also trip slime's `no_sync_func` assert (see "Assertion: config.no_sync_func must be None") unless the image carries a fix — and a runtime sed in `run-training.sh` (the entrypoint, which runs on the head pod) patches only the head pod's copy, not the worker pods' Ray actors.
 
 **Fix:** ship both flags together, and only on an image whose Megatron/slime accept overlap with slime's `no_sync_func`. If it doesn't, drop both; a patched image (see "Building a patched image" at the bottom of this file) is rarely worth a marginal lever.
 
@@ -325,13 +323,13 @@ A big step_time_max with a tight p50 looks like a rollout stall but usually isn'
 
 **Fix:** strike selective recompute on this model architecture at that GPU count. Use `full uniform`.
 
-### TP=1 + high DP goes bimodal near the memory cliff
+### TP=1 OOMs or stalls at the TP>1 leader's mt
 
-**Pattern:** run completes but median tok/s is far below expectation with a very wide IQR; a sizable fraction of steady-state steps run several times slower than the median.
+**Pattern:** a TP=1 run OOMs (often on the last stage's fp32 logits buffer) or runs near the allocator-cleanup threshold at an mt that fits TP=2 comfortably.
 
-**Cause:** TP=1 has no sequence parallel, so per-rank attention activation memory is unsharded (double TP=2's). At an mt that fits TP=2 comfortably the headroom is gone, causing periodic memory-pressure stalls (recompute interactions, kernel re-tuning, allocator pressure). Same regime as any config near the OOM cliff under high mt.
+**Cause:** TP=1 has no sequence parallel, so per-rank activations and the last stage's fp32 logits (`mt × vocab × 4 B / TP`) are unsharded: at the same mt they are TP times those of a TP>1 run.
 
-**Fix:** lower mt for TP=1 (its mt ceiling is roughly TP=2's ÷ 2), or add PP to free memory; otherwise use TP=2. TP=1 can still be the winner at the right mt (levers.md §d).
+**Fix:** rerun TP=1 at the TP>1 mt ÷ TP, or add PP to free memory. An OOM at the TP>1 leader's mt is not a TP=1 result; TP=1 can still be the winner at the right mt (levers.md §d).
 
 ### `--moe-pad-expert-input-to-capacity` deadlocks at first alltoall on slime/Megatron with many-expert EP
 
@@ -378,7 +376,7 @@ one-time baseline edit, and a changed image makes a new baseline: rerun the base
 1. Write the full error to the ledger under `what_i_learned` verbatim, including the last 50 lines of context from `train.log`.
 2. Form a *best-guess* hypothesis based on what the error suggests (OOM → memory; timeout → network/deadlock; assertion → config mismatch). Don't skip this step — the hypothesis is the learning, even if wrong.
 3. Try *one* reasoned fix based on the hypothesis, labeled clearly as a novel-failure response (include in the ledger entry's `next_experiment_suggestion`: "novel crash — trying X based on hypothesis Y").
-4. If that fails too, record the pattern and what you learned in `RESULTS.md` (and, when it generalizes, as a rule in `levers.md`; this file stays read-only), and shift to a *different* experiment direction. Don't burn more attempts at the same crash.
+4. If that fails too, record the pattern and what you learned in `RESULTS.md` (and, when it generalizes, as a lesson in `LESSONS.md`, SKILL.md L4(c); this file and `levers.md` stay read-only), and shift to a *different* experiment direction. Don't burn more attempts at the same crash.
 5. Only escalate to "Blocked on human" in the project's `RESULTS.md` after you've accumulated **3 consecutive genuinely-novel crashes** that none of your reasoning unblocks. One crash is a puzzle; three is a pattern that needs human-level context.
 
 The goal: **always have a next experiment to run**. A novel crash should produce both a ledger entry *and* a next experiment — never a stall.

@@ -3,19 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tamper detection for the files an unattended campaign must keep unchanged.
 
-    integrity.py seal <control_dir> [--dataset PATH]   # first launch: record the protected files and the dataset
+    integrity.py seal <control_dir> [--dataset PATH] [--source DIR]
+                                                       # first launch: record the protected files and the dataset
     integrity.py refresh <control_dir>                 # later launch: re-record the settings and prompts it rewrote
     integrity.py check <control_dir> [--where TEXT] [--relaunch] [--teardown] [--dataset]
                                                        # exit 0 intact, 3 failed (violation record), 4 cannot verify now
+    integrity.py source-check <control_dir> [--where TEXT]
+                                                       # session end: warn of changes to the source tree; exit 0
 
 The control directory, <campaign_dir>/.attune, belongs to launch_campaign.sh: it holds the campaign's copies of the
 skill and the harness, the campaign's config.env and this module's record, integrity.json. The record holds the
-SHA-256 of every protected file: both copies (the scoring, measurement and correctness tools and rules among them),
-config.env, the goal and resume prompts, the rendered .claude/settings.json, and the rules directory,
-frozen-arguments file (with its allowlist, component-test and defect files) and calibration file that config.env names
-outside the copies. For the append-only files (every <campaign_dir>/*/AUTOTUNE_LEDGER.jsonl, $AUTOTUNE_LEDGER, the
-GPU-hour log and the skill copy's references/levers.md) it holds the length and hash of the content seen so far. It
-also holds the dataset's rows_sha256 (and file sha256), read through the log pod at launch.
+SHA-256 of every protected file: both copies (the lever catalog references/levers.md and the scoring, measurement and
+correctness tools and rules among them), config.env, the goal and resume prompts, the rendered .claude/settings.json,
+and the rules directory, frozen-arguments file (with its allowlist, component-test and defect files) and calibration
+file that config.env names outside the copies. For the append-only files (every <campaign_dir>/*/AUTOTUNE_LEDGER.jsonl,
+$AUTOTUNE_LEDGER and the GPU-hour log) it holds the length and hash of the content seen so far. It also holds the
+dataset's rows_sha256 (and file sha256), read through the log pod at launch, and the tree the copies came from
+($ATTUNE_HOME) with its git commit and whether its skill/ or harness/ had uncommitted changes, which with the
+catalog's hash name the catalog version a campaign ran under.
 
 A check passes when every protected file is unchanged, no file was added to the copies outside
 skill/past_tuning_projects/ (new summaries), every append-only file still begins with the content last seen and,
@@ -23,7 +28,11 @@ with --dataset (a later launch, and before a recipe ships), the dataset still ha
 longer content. A mismatch, or any error while checking, writes integrity_violation.json and the campaign has failed
 for good: the Stop hook tears down the tracked runs and ends the session, ledger_append.py appends nothing (and tears
 them down), parity_verdict.py ships nothing and launch_campaign.sh exits 3. `write_rule` gives the PreToolUse guard
-the same classification for the file-edit tools. Runs on Python 3.7+ (the hooks import it).
+the same classification for the file-edit tools, and also refuses edits of the source tree's skill/ and harness/.
+A Bash command can still write there, so each launch also records the hashes of those two directories and
+`source-check` names every change when the session ends, in its output and in the record's source_checks. That is a
+warning, never a failure: the copies are unaffected, and an operator may change a shared tree during a campaign.
+Runs on Python 3.7+ (the hooks import it).
 """
 
 from __future__ import annotations
@@ -47,6 +56,7 @@ CONTROL_NAME = ".attune"
 LAUNCHER_FILES = (".claude/settings.json", "goal_prompt.rendered.txt", "goal_prompt.txt", "resume_prompt.txt")
 OPERATOR_FILES = ("goal_prompt.txt", "resume_prompt.txt")  # the operator may edit these between sessions
 SKIP_DIRS = frozenset({"__pycache__", ".pytest_cache"})
+SOURCE_DIRS = ("skill", "harness")  # what the launcher copies from the source tree
 DEFAULT_CONTROL = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 VERSION = 1
 
@@ -133,7 +143,7 @@ def _external(cfg):
 
 def _append_paths(p, cfg):
     gpuh = cfg.get("AUTOTUNE_GPUH_LOG") or os.path.join(p.campaign, "gpuh.jsonl")
-    out = [p.levers, os.path.realpath(gpuh)] + _ledgers(p.campaign)
+    out = [os.path.realpath(gpuh)] + _ledgers(p.campaign)
     if cfg.get("AUTOTUNE_LEDGER"):
         out.append(os.path.realpath(cfg["AUTOTUNE_LEDGER"]))
     return out
@@ -182,9 +192,41 @@ def _digests(paths):
     return {f: _sha(_bytes(f)) for f in paths if os.path.isfile(f)}
 
 
-def seal(control, dataset=None):
-    """Record the protected and append-only files of the campaign whose config.env is in `control`, and, with
-    `dataset`, the dataset's hashes read through the log pod."""
+def _git(tree, *args):
+    try:
+        r = subprocess.run(["git", "--no-optional-locks", "-C", tree] + list(args), capture_output=True, text=True,
+                           timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None if r.returncode else r.stdout
+
+
+def _version(tree):
+    """(commit, dirty) of `tree` when it is the top of a git checkout, else (None, None); dirty is whether its skill/
+    or harness/ has uncommitted changes, untracked files included."""
+    words = (_git(tree, "rev-parse", "--show-toplevel", "HEAD") or "").split()
+    if len(words) != 2 or os.path.realpath(words[0]) != os.path.realpath(tree):
+        return None, None
+    status = _git(tree, "status", "--porcelain", "--", *SOURCE_DIRS)
+    return words[1], None if status is None else bool(status.strip())
+
+
+def _snapshot(source):
+    """{path relative to `source`: sha256, or None when unreadable} of every file in its skill/ and harness/."""
+    out = {}
+    for d in SOURCE_DIRS:
+        for f in _files(os.path.join(source, d)):
+            try:
+                data = _bytes(f)
+            except OSError:
+                data = None
+            out[os.path.relpath(f, source)] = None if data is None else _sha(data)
+    return out
+
+
+def seal(control, dataset=None, source=None):
+    """Record the protected and append-only files of the campaign whose config.env is in `control`, with `dataset`
+    the dataset's hashes read through the log pod, and with `source` the tree the copies came from."""
     p = Paths(control)
     cfg = read_config(p.config)
     campaign = cfg.get("CAMPAIGN_DIR") or cfg.get("AUTOTUNE_PROJECT_ROOT")
@@ -197,6 +239,10 @@ def seal(control, dataset=None):
     rec = {"version": VERSION, "sealed_at": _now(), "control": p.control, "campaign": p.campaign,
            "campaign_id": cfg.get("ATTUNE_CAMPAIGN_ID", ""), "trees": [p.skill, p.harness], "open": [p.summaries],
            "files": _digests(files), "append_only": {f: _seen(f) for f in appends}}
+    if source:
+        commit, dirty = _version(source)
+        rec.update(source=os.path.realpath(source), source_commit=commit, source_dirty=dirty,
+                   source_files=_snapshot(source))
     if dataset:
         digest = dataset_digest(cfg, dataset)
         if digest.get("missing"):
@@ -208,7 +254,8 @@ def seal(control, dataset=None):
 
 
 def refresh(control):
-    """Re-record the files the launcher rewrites on a later launch (settings and prompts); the rest stays as sealed."""
+    """Re-record the files the launcher rewrites on a later launch (settings and prompts) and the source tree's
+    hashes that source_check compares against; the rest stays as sealed."""
     p = Paths(control)
     with _locked(p.control):
         rec = _load(p.record)
@@ -216,8 +263,29 @@ def refresh(control):
         for f in p.launcher_files():
             rec["files"].pop(f, None)
         rec["files"].update(_digests(p.launcher_files()))
+        if rec.get("source"):
+            rec["source_files"] = _snapshot(rec["source"])
         _write_json(p.control, p.record, rec)
     return rec
+
+
+def source_check(control, where="source-check"):
+    """The changes to the source tree's skill/ and harness/ since this launch ([] when none), appended to the record's
+    source_checks; None when the record holds no hashes of a source tree."""
+    p = Paths(control)
+    rec = _load(p.record)
+    source, before = rec.get("source"), rec.get("source_files")
+    if not source or not isinstance(before, dict):
+        return None
+    now = _snapshot(source)
+    changes = [{"path": f, "problem": "deleted" if f not in now else "modified"}
+               for f in sorted(before) if f not in now or now[f] != before[f]]
+    changes += [{"path": f, "problem": "added"} for f in sorted(set(now) - set(before))]
+    with _locked(p.control):
+        rec = _load(p.record)
+        rec.setdefault("source_checks", []).append({"at": _now(), "where": where, "changes": changes})
+        _write_json(p.control, p.record, rec)
+    return changes
 
 
 # ---- the dataset, read through the log pod -------------------------------------------------------------------------
@@ -509,8 +577,15 @@ def write_rule(path, control, campaign=None, append=()):
     recorded = rec["files"] if rec else {}
     appends = set(rec["append_only"]) if rec else set()
     appends.update(os.path.realpath(a) for a in append if a)
-    if path == p.levers or path in appends or os.path.basename(path) == LEDGER_NAME:
+    if path in appends or os.path.basename(path) == LEDGER_NAME:
         return "append", "%s is append-only" % path
+    lessons = "write proposed lessons to <project_folder>/LESSONS.md (SKILL.md L4c)"
+    if path == p.levers:
+        return "protected", "%s is the campaign's read-only lever catalog; %s" % (path, lessons)
+    source = rec.get("source") if rec else None
+    if source and any(_under(path, os.path.join(source, d)) for d in ("skill", "harness")):
+        return "protected", ("%s is in the ATTUNE tree the campaign was copied from; its skill is the read-only copy "
+                             "%s, and %s" % (path, p.skill, lessons))
     if _under(path, p.summaries) and path != p.summaries:
         if path in recorded:
             name = os.path.basename(path)
@@ -535,7 +610,7 @@ def main(argv=None):
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("seal", "refresh", "check"))
+    ap.add_argument("command", choices=("seal", "refresh", "check", "source-check"))
     ap.add_argument("control_dir")
     ap.add_argument("--where", default="integrity.py check", help="where the check runs (for the violation record)")
     ap.add_argument("--relaunch", action="store_true",
@@ -545,10 +620,11 @@ def main(argv=None):
     ap.add_argument("--dataset", nargs="?", const=True, default=None, metavar="PATH",
                     help="seal: record the hashes of the dataset at PATH (read through the log pod); check: hash "
                          "the recorded dataset again")
+    ap.add_argument("--source", metavar="DIR", help="seal: the tree the copies came from ($ATTUNE_HOME)")
     a = ap.parse_args(argv)
     if a.command == "seal":
         try:
-            rec = seal(a.control_dir, dataset=a.dataset if isinstance(a.dataset, str) else None)
+            rec = seal(a.control_dir, dataset=a.dataset if isinstance(a.dataset, str) else None, source=a.source)
         except Exception as e:
             print("integrity: cannot seal the campaign: %s: %s" % (type(e).__name__, e), file=sys.stderr)
             return 2
@@ -560,6 +636,23 @@ def main(argv=None):
     if a.command == "refresh":
         refresh(a.control_dir)
         print("integrity: re-recorded the launcher's settings and prompts")
+        return 0
+    if a.command == "source-check":
+        try:
+            changes = source_check(a.control_dir, a.where)
+            source = _load(Paths(a.control_dir).record).get("source")
+        except Exception as e:
+            print("integrity: cannot check the source tree: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+            return 1
+        if changes is None:
+            print("integrity: the record names no source tree to check")
+        elif not changes:
+            print("integrity: the source tree's skill/ and harness/ are unchanged since launch (%s)" % source)
+        else:
+            print("WARNING: the source tree %s changed during the session: %s. The campaign's copies are unaffected; "
+                  "unless an operator made these changes, the session wrote into the tree (recorded in %s)"
+                  % (source, summary(changes, limit=10), os.path.join(os.path.realpath(a.control_dir), RECORD)),
+                  file=sys.stderr)
         return 0
     problems = check(a.control_dir, a.where, relaunch=a.relaunch, teardown=a.teardown, dataset=bool(a.dataset))
     lasting = [x for x in problems if not x.get("transient")]

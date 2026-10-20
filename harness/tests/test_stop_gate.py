@@ -186,7 +186,9 @@ def test_a_later_row_without_gpuh_keeps_the_earlier_value():
 def test_a_violation_tears_down_the_tracked_runs_before_the_session_ends(sealed, monkeypatch):
     monkeypatch.setenv("AUTOTUNE_AUTONOMOUS", "1")
     (sealed.root / "proj" / "tracked_jobs.jsonl").write_text('{"run_id": "alice-tune-r1"}\n')
-    (sealed.skill / "references" / "levers.md").write_text("# levers, rewritten\n")
+    levers = sealed.skill / "references" / "levers.md"
+    levers.chmod(0o644)
+    levers.write_text("# levers, rewritten\n")
     out = json.loads(stop_gate.respond("{}"))
     assert out["continue"] is False and "live runs torn down: alice-tune-r1" in out["stopReason"]
     assert sealed.torn() == ["alice-tune-r1"]

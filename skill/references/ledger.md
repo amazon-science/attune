@@ -135,7 +135,7 @@ appear as SKILL.md Invariants/gotchas — repeated here as a scan-able checklist
 
 **Config-template hygiene**
 13. **Strip `NCCL_PROTO` from inherited YAMLs** — auto-select beats a manual pin, and `NCCL_PROTO=Simple` on EFA hangs PP>1 (easily misread as a hardware fault).
-14. **Intranode-MoE placement follows the EP/ETP rank-fold, not `TP × EP`** (the `TP × EP` mnemonic is right only by accident when ETP=1). The rule + its source (`parallel_state.py` expert rank generator) is in levers.md §b; confirm the fold order for your image with `print_topology.md` rather than assuming.
+14. **Intranode-MoE placement follows the EP/ETP rank-fold, not `TP × EP`** (the `TP × EP` mnemonic agrees with the rule only when ETP = TP, Megatron's default when ETP is unset). The rule + its source (`parallel_state.py` expert rank generator) is in levers.md §b; confirm the fold order for your image with `print_topology.md` rather than assuming.
 15. **When moving a YAML between p5e↔p5en, update BOTH `instance-type` AND `vpc.amazonaws.com/efa`** (p5e=32, p5en=16 NICs) — a mismatch fails NCCL bootstrap with `NET/OFI Unexpected number of remote rails`.
 16. **Don't port a winner topology across datasets without re-profiling** — short-seq vs long-seq favor different families (the swing can be large). Characterize the new data (SFT: the token-length distribution; RL: prompt scan + first-rollout `response_len`) → refresh `data_insights.md` → re-sweep.
 

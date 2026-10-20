@@ -4,9 +4,10 @@
 """Claude Code PreToolUse hook for unattended campaigns; inactive unless AUTOTUNE_AUTONOMOUS=1.
 
 - Bash: the two rules of command_guard.py, kubectl scope and curl/wget only with web access on; everything else runs.
-- Write, Edit, MultiEdit, NotebookEdit: refuses the protected campaign files (integrity.write_rule). The three
-  append-only files (ledgers, the GPU-hour log, the lever catalog) take only changes that keep their current text as
-  the beginning: a Write that starts with it, an Edit or MultiEdit whose result starts with it.
+- Write, Edit, MultiEdit, NotebookEdit: refuses the protected campaign files, the lever catalog among them, and the
+  skill/ and harness/ of the tree the campaign was copied from (integrity.write_rule). The append-only files (ledgers,
+  the GPU-hour log) take only changes that keep their current text as the beginning: a Write that starts with it, an
+  Edit or MultiEdit whose result starts with it.
 - AskUserQuestion: denies with guidance, so the agent proceeds on a recorded default.
 The guard prevents accidents to ATTUNE's own records and cluster scope; it is not a security boundary. Any error
 denies the call; the settings run it as `python3 <this file> || exit 2`, so a failure to start blocks the call too.

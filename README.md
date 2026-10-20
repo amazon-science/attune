@@ -25,8 +25,13 @@ On four models held out from its development, each starting from the strongest p
 ## How it works
 
 - **Search.** The agent proposes each candidate from a diagnosis of the current leader (exposed communication,
-  pipeline bubbles, memory, kernel launches) and the lessons in the lever catalog, `skill/references/levers.md`, which
-  it extends as a campaign learns.
+  pipeline bubbles, memory, kernel launches) and the lessons in the lever catalog, `skill/references/levers.md`.
+  Each measured lesson carries a scope tag naming the workload, model class and GPUs it was measured on. A campaign
+  reads the catalog and never edits it: it writes the lessons it learns, with claim, scope, evidence and conflicts,
+  to its own `LESSONS.md`. When a session ends, the launcher collects that file into the operator's inbox, if one is
+  set and the campaign passed its integrity check. A curation pass, run when the operator chooses, admits the few
+  that are correct and general as one catalog change, checked by an independent reviewer agent and approved by a
+  human (`harness/CURATION.md`).
 - **Measurement.** Every candidate runs the same fixed-shape workload for 20 steps, scored on steps 5 to 19, and
   replaces the leader only if it beats it by more than the noise band.
 - **Correctness.** A configuration check refuses changes to the training objective (data, batch, schedule, optimizer,
@@ -37,10 +42,10 @@ On four models held out from its development, each starting from the strongest p
   `skill/scripts/correctness/PROTOCOL.md` has the rules.
 - **Autonomy.** A Stop hook keeps the agent working until the budget is spent or it records a stop with evidence,
   and a ledger lets a crashed session resume. The launcher gives each campaign read-only copies of the skill and
-  harness and records the hashes of the files a campaign must keep: the scoring, measurement and correctness tools,
-  the campaign's settings and prompts, and the append-only ledger, GPU-hour log and lever catalog. A change to any of
-  them fails the campaign, and no recipe ships from it. A small PreToolUse guard keeps `kubectl` inside the campaign's
-  context, namespace and runs.
+  harness and records the hashes of the files a campaign must keep: the lever catalog, the scoring, measurement and
+  correctness tools, the campaign's settings and prompts, and the append-only ledger and GPU-hour log. A change to
+  any of them fails the campaign, and no recipe ships from it. A small PreToolUse guard keeps `kubectl` inside the
+  campaign's context, namespace and runs.
 
 ## Requirements
 
@@ -64,6 +69,8 @@ row-building tools in `skill/scripts/data/` also need pyarrow and transformers.
    relaunch: a change while a session runs fails the campaign. The project folder's `RESULTS.md` holds the
    leaderboard, and the final report names the shipped recipe. The launcher exits 3 when the campaign fails its
    integrity check (`<campaign_dir>/.attune/integrity_violation.json`), after tearing down the campaign's tracked runs.
+   When a session ends, the launcher warns if this tree's `skill/` or `harness/` changed during it and, with
+   `ATTUNE_LESSONS_INBOX` set, copies an intact campaign's `LESSONS.md` there for curation (`harness/CURATION.md`).
 
 The agent creates and deletes jobs on your cluster and spends GPU-hours until the budget is used or it stops. The
 guard prevents accidents to ATTUNE's own records and to the cluster scope: every `kubectl` call names the campaign's
@@ -87,7 +94,8 @@ skill/                  the skill
     data/                   fixed-length SFT row builder, loss masks, rollout adapter
     pod_hooks/              in-pod hook loader and registry
   past_tuning_projects/   campaign summaries the skill writes and reads
-harness/                unattended runner: launcher, integrity record, Stop and PreToolUse hooks
+harness/                unattended runner: launcher, integrity record, Stop and PreToolUse hooks, lesson export,
+                        curation guide (CURATION.md)
 config.example.env      every setting, one line each
 ```
 

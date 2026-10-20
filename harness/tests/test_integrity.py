@@ -1,7 +1,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""integrity.py passes an untouched campaign and appends, and fails rewrites, truncation, deletion, additions to the
-copies and changed settings, for good, with a violation record; new summaries are allowed.
+"""integrity.py passes an untouched campaign and appends, and fails rewrites, truncation, deletion, any change to the
+lever catalog, additions to the copies and changed settings, for good, with a violation record; new summaries and
+the project folder's LESSONS.md are allowed, and the tree the copies came from is refused to the file-edit tools,
+recorded with its commit and dirty flag, and checked at session end, where a change is a warning, not a failure.
 Run: python3 -m pytest harness/tests"""
 import json
 import os
@@ -38,16 +40,15 @@ def test_an_untouched_campaign_passes(sealed):
     assert str(sealed.skill / "SKILL.md") in rec["files"]
     assert str(sealed.control / "config.env") in rec["files"]
     assert str(sealed.root / ".claude" / "settings.json") in rec["files"]
-    assert str(sealed.skill / "references" / "levers.md") in rec["append_only"]
-    assert str(sealed.root / "gpuh.jsonl") in rec["append_only"]
+    assert str(sealed.skill / "references" / "levers.md") in rec["files"]
+    assert str(sealed.root / "gpuh.jsonl") in rec["append_only"] and len(rec["append_only"]) == 1
     assert not os.access(sealed.control / integrity.RECORD, os.W_OK)
 
 
 def test_appends_pass_and_are_recorded(sealed):
     sealed.ledger.write_text('{"run_id": "a"}\n')        # a ledger created after launch
     (sealed.root / "gpuh.jsonl").write_text('{"run": "a"}\n')
-    with open(sealed.skill / "references" / "levers.md", "a") as f:
-        f.write("- a new rule\n")
+    (sealed.root / "proj" / "LESSONS.md").write_text("## a lesson\n")
     assert problems(sealed) == []
     rec = json.loads((sealed.control / integrity.RECORD).read_text())
     assert rec["append_only"][str(sealed.ledger)]["length"] == len('{"run_id": "a"}\n')
@@ -71,10 +72,12 @@ def test_append_only_files_keep_what_was_seen(sealed, change):
     assert {"rewrite": "rewritten", "truncate": "truncated", "delete": "deleted"}[change] in found[0]["problem"]
 
 
-def test_the_lever_catalog_is_append_only(sealed):
+@pytest.mark.parametrize("mode,text", [("a", "- an appended rule\n"), ("w", "# levers\n- the rule, reworded\n")])
+def test_the_lever_catalog_is_read_only(sealed, mode, text):
     levers = sealed.skill / "references" / "levers.md"
-    levers.write_text("# levers\n- the rule, reworded\n")
-    assert "rewritten" in problems(sealed)[0]["problem"]
+    assert not os.access(levers, os.W_OK)
+    edit(levers, text, mode)
+    assert problems(sealed) == [{"path": str(levers), "problem": "modified"}]
 
 
 @pytest.mark.parametrize("rel", ["skill/SKILL.md", "skill/scripts/read_metrics.sh",
@@ -251,7 +254,7 @@ def test_cli_exit_codes(sealed):
 
 @pytest.mark.parametrize("path,kind", [
     ("skill/SKILL.md", "protected"), ("harness/hooks/stop_gate.py", "protected"), ("config.env", "protected"),
-    ("integrity.json", "protected"), ("skill/references/levers.md", "append"),
+    ("integrity.json", "protected"), ("skill/references/levers.md", "protected"),
     ("skill/past_tuning_projects/README.md", "protected"), ("skill/past_tuning_projects/p_summary.md", None),
     ("skill/scripts/new.py", "protected")])
 def test_write_rule_in_the_control_directory(sealed, path, kind):
@@ -261,6 +264,109 @@ def test_write_rule_in_the_control_directory(sealed, path, kind):
 @pytest.mark.parametrize("rel,kind", [
     (".claude/settings.json", "protected"), (".claude/x.ipynb", "protected"), ("goal_prompt.rendered.txt", "protected"),
     ("resume_prompt.txt", "protected"), ("gpuh.jsonl", "append"), ("proj/AUTOTUNE_LEDGER.jsonl", "append"),
-    ("proj/RESULTS.md", None), ("proj/aid.py", None)])
+    ("proj/RESULTS.md", None), ("proj/LESSONS.md", None), ("proj/aid.py", None)])
 def test_write_rule_in_the_campaign_directory(sealed, rel, kind):
     assert integrity.write_rule(str(sealed.root / rel), str(sealed.control))[0] == kind
+
+
+def test_the_lever_catalog_points_to_lessons(sealed):
+    kind, why = integrity.write_rule(str(sealed.skill / "references" / "levers.md"), str(sealed.control))
+    assert kind == "protected" and "LESSONS.md" in why
+
+
+def test_the_source_tree_is_recorded_and_refused(campaign):
+    tree = campaign.tmp / "tree"
+    for d in ("skill/references", "harness", "attune-projects"):
+        (tree / d).mkdir(parents=True)
+    root = tree / "attune-projects" / "c1"   # a campaign directory inside the tree stays the agent's own
+    (root / "proj").mkdir(parents=True)
+    control = seal_campaign(root, {"CAMPAIGN_DIR": str(root)}, source=str(tree))
+    rec = json.loads((control / integrity.RECORD).read_text())
+    assert rec["source"] == str(tree) and rec["source_commit"] is None   # not a git checkout
+    for rel in ("skill/references/levers.md", "skill/past_tuning_projects/p_summary.md", "harness/integrity.py"):
+        kind, why = integrity.write_rule(str(tree / rel), str(control))
+        assert kind == "protected" and "copied from" in why and "LESSONS.md" in why, rel
+    for path in (tree / "README.md", root / "proj" / "LESSONS.md"):
+        assert integrity.write_rule(str(path), str(control))[0] is None, path
+
+
+def test_the_source_commit_and_dirty_flag_are_recorded(campaign):
+    tree = campaign.tmp / "tree"
+    (tree / "skill").mkdir(parents=True)
+    (tree / "skill" / "SKILL.md").write_text("# skill\n")
+    (tree / "README.md").write_text("# tree\n")
+    git = ["git", "-C", str(tree), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    try:
+        subprocess.run(git + ["init", "-q"], check=True)
+        subprocess.run(git + ["add", "."], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "base"], check=True)
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("no usable git")
+    head = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    def sealed_with(name):
+        root = campaign.tmp / name
+        (root / "proj").mkdir(parents=True)
+        rec = json.loads((seal_campaign(root, {"CAMPAIGN_DIR": str(root)}, source=str(tree)) / integrity.RECORD)
+                         .read_text())
+        return rec["source_commit"], rec["source_dirty"]
+    assert sealed_with("clean") == (head, False)
+    (tree / "README.md").write_text("# tree, edited\n")   # outside skill/ and harness/
+    assert sealed_with("readme") == (head, False)
+    (tree / "harness").mkdir()
+    (tree / "harness" / "new.py").write_text("")          # untracked counts
+    assert sealed_with("untracked") == (head, True)
+
+
+def _tree_campaign(campaign):
+    tree = campaign.tmp / "tree"
+    for rel in ("skill/references/levers.md", "skill/SKILL.md", "harness/integrity.py"):
+        (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tree / rel).write_text("# %s\n" % rel)
+    control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root)}, source=str(tree))
+    return tree, control
+
+
+def test_a_bash_write_into_the_source_tree_is_reported_not_failed(campaign):
+    tree, control = _tree_campaign(campaign)
+    rec = json.loads((control / integrity.RECORD).read_text())
+    assert set(rec["source_files"]) == {"skill/references/levers.md", "skill/SKILL.md", "harness/integrity.py"}
+    assert integrity.source_check(str(control), "first") == []
+    with open(tree / "skill" / "references" / "levers.md", "a") as f:   # cat >> levers.md <<'EOF'
+        f.write("- a rule\n")
+    (tree / "skill" / "SKILL.md").unlink()
+    (tree / "harness" / "new.py").write_text("")
+    (tree / "harness" / "__pycache__").mkdir()
+    (tree / "harness" / "__pycache__" / "integrity.cpython-310.pyc").write_bytes(b"")   # caches are skipped
+    changes = [{"path": "skill/SKILL.md", "problem": "deleted"},
+               {"path": "skill/references/levers.md", "problem": "modified"},
+               {"path": "harness/new.py", "problem": "added"}]
+    assert integrity.source_check(str(control), "second") == changes
+    assert integrity.check(str(control)) == [] and not (control / integrity.VIOLATION).exists()
+    checks = json.loads((control / integrity.RECORD).read_text())["source_checks"]
+    assert [(c["where"], c["changes"]) for c in checks] == [("first", []), ("second", changes)]
+
+
+def test_a_later_launch_takes_the_trees_hashes_again(campaign):
+    tree, control = _tree_campaign(campaign)
+    (tree / "skill" / "SKILL.md").write_text("# an operator's change between sessions\n")
+    integrity.refresh(str(control))
+    assert integrity.source_check(str(control)) == []
+
+
+def test_source_check_cli(campaign, sealed, capsys):
+    assert integrity.main(["source-check", str(sealed.control)]) == 0
+    assert "names no source tree" in capsys.readouterr().out
+    root = campaign.tmp / "c2"
+    (root / "proj").mkdir(parents=True)
+    tree = campaign.tmp / "tree"
+    (tree / "skill" / "references").mkdir(parents=True)
+    (tree / "skill" / "references" / "levers.md").write_text("# levers\n")
+    control = seal_campaign(root, {"CAMPAIGN_DIR": str(root)}, source=str(tree))
+    assert integrity.main(["source-check", str(control)]) == 0
+    assert "unchanged since launch" in capsys.readouterr().out
+    (tree / "skill" / "references" / "levers.md").write_text("# levers\n- a rule\n")
+    assert integrity.main(["source-check", str(control), "--where", "session end"]) == 0
+    err = capsys.readouterr().err
+    assert err.startswith("WARNING: the source tree %s changed" % tree), err
+    assert "skill/references/levers.md: modified" in err

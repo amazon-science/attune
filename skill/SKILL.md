@@ -84,14 +84,20 @@ to fill idle slots up to the cap) and L4 (harvest each run as it finishes) run c
 block the whole loop waiting on one job — keep free slots full while others run, and finalize each
 completion independently.
 
+The lessons in `references/levers.md` and the Search discipline rules below come from a mix of fixed-length
+(mostly fixed 8K) and variable-length campaigns; each entry's scope tag says which, and a lesson measured in one
+regime is a hypothesis to test in another. The loop and stop rules are process rules; the measured facts they cite
+come from fixed 4K and fixed 8K campaigns (H100, H200, B200), and the claim that a flag win rarely transfers across
+topologies also from lever directions that flipped between fixed 8K and variable-length data.
+
 ```
-L1. Read ledger + RESULTS.md + data_insights.md + the skill's `past_tuning_projects/*_summary.md`
+L1. Read ledger + RESULTS.md + data_insights.md + LESSONS.md + the skill's `past_tuning_projects/*_summary.md`
     (priors from prior projects, if any) + references/ledger.md (ledger schema, anti-patterns)
     → current best, what's tried, priors, and which topology family to favor.
     **Read `references/levers.md` IN FULL once per session before your first hypothesis** (it is the
     cross-project heuristic catalog — priority ladder, MoE folding, profile→lever table, per-lever
-    mechanisms/failure-modes); re-read the relevant section after any edit to it. Do not form an L2
-    hypothesis without having loaded it — a "remembered" lever is stale.
+    mechanisms/failure-modes). Do not form an L2 hypothesis without having loaded it — a "remembered"
+    lever is stale.
 L2. Choose the next experiment(s) with your own tuning judgement — there is NO prescribed rule for
     which lever to pull. Under a fixed slot budget you optimize for the best recipe you can find by the
     last slot, never for coverage of the search space. Ground the decision in four sources of context,
@@ -106,15 +112,16 @@ L2. Choose the next experiment(s) with your own tuning judgement — there is NO
     Process discipline (not a choice-rule): one variable per run for clean attribution unless tightly
     coupled; state the hypothesis (change <X> → bottleneck <Y> shrinks via <Z>, expected Δ%) — no
     hypothesis, no launch; close an axis only by the two-point rule under Search discipline below. A candidate topology must be
-    valid (divisibility + intranode-MoE placement — confirm against `megatron/core/parallel_state.py`
+    valid (divisibility; confirm it and the MoE placement against `megatron/core/parallel_state.py`
     / `print_topology.md`); a flag win rarely transfers across topologies, so re-verify it at the
     eventual topology winner. Fill idle slots up to the cap with your top hypotheses; queue the rest.
     **Topology is FIVE independent axes (TP, PP, EP, CP, DP) — sweep each before concluding anything about
     topology.** A win on one axis (e.g. CP) does NOT mean the others are explored, and "I tuned topology"
     is false if you only moved one dim. Before declaring a "topology/structural ceiling", confirm you have
     actually probed TP (incl. TP1/2), PP, and EP neighbors — not just CP/DP. These axes are coupled through
-    `world = TP·PP·CP·DP` and `EP = TP·CP·DP` (so moving one forces another — e.g. TP↓ raises DP; PP↓ raises
-    EP): reason about that coupling and the profile before ruling an axis out, but a coupling-driven
+    `world = TP·PP·CP·DP` and `ETP·EP·EDP = TP·CP·DP` (so moving one forces another — e.g. TP↓ raises DP;
+    PP↓ raises DP and EP's ceiling, while EDP > 1 can hold EP where it is): reason about that coupling and
+    the profile before ruling an axis out, but a coupling-driven
     prediction is a hypothesis to TEST with one run, not a reason to skip the axis.
     **Before ANY flag, verify it in the running image's `/root/Megatron-LM/megatron/training/arguments.py`
     /source** (never from memory/docs) — what it sets, asserts, and which other flags it silently
@@ -147,15 +154,26 @@ L4. On each finished run, do BOTH:
         those traces and rerun before classifying, since a stall local to one stage is invisible
         from the others. Without a trace, classify what you can from `train.log` (`perf N:` fields,
         memory and timing lines) and say so in `profile_reason`.
-    (c) **Write back conclusive insights.** If the run established a *generalizable* fact about a lever
-        — its mechanism, when it helps or hurts, a failure mode, an interaction, or a saturation/quantization
-        boundary (e.g. fixed-length mt step-function) — APPEND it to the end of `references/levers.md` (the
-        cross-project catalog) as a rule, in the same commit as the ledger row. The file is append-only: under the
-        launcher an edit anywhere but its end is refused, and a rewrite fails the campaign. `levers.md` holds guidance
-        only: mechanism, condition, and direction, with a magnitude at most as a word ("large", "a
-        tie") or a rough range; no exact throughputs, deltas, step times, memory figures, GPU counts,
-        dates, model or cluster names, or run_ids. The numbers and evidence go in RESULTS.md and the
-        ledger. When in doubt whether it generalizes, add it.
+    (c) **Propose conclusive insights as lessons.** If the run established a *generalizable* fact about a
+        lever — its mechanism, when it helps or hurts, a failure mode, an interaction, or a saturation/quantization
+        boundary (e.g. fixed-length mt step-function) — add it to `<project_folder>/LESSONS.md` in the same
+        commit as the ledger row. When in doubt whether it generalizes, add it. Never edit `references/levers.md`:
+        it is the campaign's read-only catalog, and under the launcher any change to it fails the campaign.
+        One entry per lesson:
+          ## <the claim in one line>
+          - Claim: mechanism, condition and direction; a magnitude at most as a word ("large", "a tie") or a
+            rough range; no model or cluster names.
+          - Scope: workload (fixed rows and their length, or variable-length data with its length range, global
+            batch and max tokens per GPU); model class (dense, MoE, hybrid linear-attention); GPU type and nodes;
+            framework and version.
+          - Evidence: the run_ids it rests on and their numbers from this ledger (tok/s/GPU, deltas, memory).
+          - Conflicts: the levers.md entries it contradicts or narrows, by heading, or "none".
+        When the session ends, the launcher copies LESSONS.md to the operator's inbox if one is set and the
+        campaign passed its integrity check; otherwise it stays in the project folder. A later curation pass,
+        outside every campaign's skill copy, admits the few lessons that hold up as one catalog change: a curator
+        agent drafts it, an independent reviewer agent checks it against the records, and a human approves it
+        (`harness/CURATION.md`). An admitted entry keeps the claim and the condensed scope tag *workload; model
+        class; GPUs*; the evidence stays with the review.
 L5. Goto L1.
 ```
 
@@ -163,11 +181,16 @@ L5. Goto L1.
 - **Two points before an axis closes.** A structural axis (a parallelism degree, a pipeline split,
   interleave depth, recompute, offload, max-tokens) closes only after two measured points on it against
   the same parent, in both directions where it has two (a larger and a smaller value; layers moved off a
-  stage and onto it), or after its feasible end point. One losing run is one point.
+  stage and onto it), or after its feasible end point. One losing run is one point. *Scope: fixed 4K, fixed 8K
+  and mock pretraining; MoE; H100, H200, B200.*
 - **A new topology starts lean.** Launch a new topology from the leader without the memory-relief
   settings the leader needed (full recompute, CPU optimizer offload or its fraction) unless a memory
   estimate for the new topology shows they are still needed. Add them back after the lean run OOMs.
   A topology probe that carries relief it does not need measures the relief, not the topology.
+  *Scope: fixed 2K and fixed 8K; MoE; H100, H200, B200.* On long-context data (rows of tens of thousands of
+  tokens) activation memory per micro-batch grows with the longest row, and new layouts launched with no or
+  selective recompute ran out of memory at every TP tried; there the memory estimate must use the longest row.
+  *Scope: long-context SFT packing; a dense model; B200.*
 
 **Invariants** (every launched run must satisfy these — they define a valid ranking; get one wrong and the result is invalid):
 
@@ -282,6 +305,7 @@ Per-project state files:
 | `tracked_jobs.jsonl` | the in-flight runs being polled | one line per live run; shrinks as runs finalize (schema: `references/ledger.md`) |
 | `RESULTS.md` | human-readable leaderboard | **REWRITE the headline leaderboard table after EVERY completed run** — regenerate it from the ledger (current leader + all ranked rows sorted by tok/s/GPU), don't just append notes below a stale table. A resuming session/human reads the top table to know the leader; a drifted headline (e.g. still showing the baseline as leader after a win) is a real failure. Sync it in the same commit as the ledger row (L4a). |
 | `QUEUE.md` | runs deferred past the concurrency cap | append/trim as slots free |
+| `LESSONS.md` | lessons this campaign proposes for the catalog (L4c) | add and revise freely; L4(c) says when the launcher copies it out for curation |
 | `gpuh.jsonl` | GPU-hour log, GPU-hour budget mode only | append-only: a line at submit and a measured line at finalize, written by `run_gpuh.py` (path `$AUTOTUNE_GPUH_LOG`, else `./gpuh.jsonl`) |
 
 **On each poll**, read `poll_run.sh`'s `status` and act by case. A finished run goes through the
@@ -405,8 +429,9 @@ an earlier campaign's summary:
 model + hardware, baseline → winner tok/s/GPU and Δ%, the biggest lever (and why), what won / tied /
 lost with reasons, excluded objective-changing wins, gotchas hit, untried ideas, and a **reference to
 the project artifacts path as an ABSOLUTE path**. Summaries are local operator records (they carry
-your numbers, paths, and cluster details); keep them out of any shared copy of the skill and move
-their generalizable rules into `levers.md` instead (`past_tuning_projects/README.md`).
+your numbers, paths, and cluster details); keep them out of any shared copy of the skill
+(`past_tuning_projects/README.md`). Before you stop, check that `LESSONS.md` holds every generalizable
+lesson the campaign established (L4c); the launcher exports that file, not the summary, for curation.
 
 ## Environment gotchas (can't-derive; verify per cluster)
 
@@ -483,11 +508,11 @@ whether it ships, never comes from your copy: `read_metrics.sh`, the correctness
 (`correctness/pair_from_runs.py`, `correctness/parity_verdict.py`, and `correctness/make_parity_arm.py` for
 diagnostic arms), `run_gpuh.py` and `calibration.py` are frozen
 and authoritative, so only their results decide the shipped recipe. Under the launcher the skill directory is the
-campaign's read-only copy, and it takes only the two records you add to it: lever rules appended to
-`references/levers.md` (L4c) and the closeout summary `past_tuning_projects/<project_tag>_<campaign_id>_summary.md`
-(a new file; the summaries already there stay as they are). The launcher
-records the hashes of the copy, the campaign's settings and prompts, and the ledger and GPU-hour log as far as they
-have been written; any other change fails the campaign, and no recipe ships from it.
+campaign's read-only copy, and it takes only one record you add to it: the closeout summary
+`past_tuning_projects/<project_tag>_<campaign_id>_summary.md` (a new file; the summaries already there stay as they
+are). Lessons go to `<project_folder>/LESSONS.md` (L4c), never into `references/levers.md`. The launcher
+records the hashes of the copy (`levers.md` included), the campaign's settings and prompts, and the ledger and
+GPU-hour log as far as they have been written; any other change fails the campaign, and no recipe ships from it.
 
 Listed in the order you use them in a cycle — what each does and when to call it:
 

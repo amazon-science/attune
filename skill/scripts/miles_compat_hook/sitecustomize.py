@@ -1,14 +1,15 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 # attune-hook-chain-member: loaded only by the hook chain (pod_hooks/sitecustomize.py)
-"""miles compatibility hook: slime's profiler switches and log-timestamp format in miles processes.
+"""miles compatibility hook: opt-in profiler switches and slime's log-timestamp format in miles processes.
 
 make_run_yaml.py loads it through the hook chain (hook_chain.py; hook name miles_compat, default on). It does nothing
 unless a miles module is imported. Two patches:
   - miles.utils.profile_utils._create_torch_profiler records shapes, stacks, memory and FLOPs only when
     SLIME_PROFILE_RECORD_SHAPES, SLIME_PROFILE_WITH_STACK, SLIME_PROFILE_MEMORY and SLIME_PROFILE_WITH_FLOPS are set
-    (the slime defaults; miles turns all four on, which slows profiled steps and inflates traces). It replaces the
-    function only when its source is miles v0.1.0's; otherwise it prints MILES_COMPAT_HOOK_SKIP and keeps miles' own.
+    (switches proposed for slime in THUDM/slime PR #2397, not merged; miles turns all four on, which slows profiled
+    steps and inflates traces). It replaces the function only when its source is miles v0.1.0's; otherwise it prints
+    MILES_COMPAT_HOOK_SKIP and keeps miles' own.
   - miles.utils.logging_utils writes "[<time>] [<worker>] file:N - msg" instead of "[<time> <worker>] ...", so
     read_metrics.sh finds the log clock on perf lines as it does for slime.
 Never raises into the host program.

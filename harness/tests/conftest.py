@@ -65,10 +65,10 @@ def _tree(root, files):
         p.write_text(text)
 
 
-def seal_campaign(root, settings, skill=None, harness=None):
+def seal_campaign(root, settings, skill=None, harness=None, source=None):
     """A campaign as launch_campaign.sh leaves it: <root>/.attune holding read-only copies of the skill and harness
     (TINY_* trees, or the given source directories), config.env with `settings`, the rendered settings and goal
-    prompt, and the integrity record. Returns the control directory."""
+    prompt, and the integrity record (naming `source` as the tree copied). Returns the control directory."""
     control = root / ".attune"
     control.mkdir()
     for name, src, tiny in (("skill", skill, TINY_SKILL), ("harness", harness, TINY_HARNESS)):
@@ -83,9 +83,8 @@ def seal_campaign(root, settings, skill=None, harness=None):
     walked = list(os.walk(control / "skill")) + list(os.walk(control / "harness"))
     for path in [os.path.join(sub, n) for sub, _, names in walked for n in names] + [sub for sub, _, _ in walked]:
         os.chmod(path, os.stat(path).st_mode & ~0o222)  # chmod -R a-w, as the launcher does
-    os.chmod(control / "skill" / "references" / "levers.md", 0o644)
     os.chmod(control / "skill" / "past_tuning_projects", 0o755)
-    integrity.seal(str(control))
+    integrity.seal(str(control), source=source)
     os.chmod(control, 0o555)
     return control
 
