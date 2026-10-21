@@ -675,7 +675,7 @@ numeric:  # 480
   - yarn_beta_slow
   - yarn_correction_range_round_to_int
   - yarn_original_max_position_embeddings
-placement:  # 140
+placement:  # 141
   - account_for_embedding_in_pipeline_split
   - account_for_loss_in_pipeline_split
   - actor_num_gpus_per_node
@@ -818,6 +818,7 @@ placement:  # 140
   - num_microbatches_with_partial_activation_checkpoints
   - overlap_dispatch_backward_with_experts_wgrad
   - use_gloo_process_groups
+  - optimizer_offload_fraction  # how much of the Adam step runs on GPU vs CPU; same algorithm and fp32 state
 packing:  # 10
   - balance_by_flops
   - balance_data
@@ -830,7 +831,7 @@ packing:  # 10
   - variable_seq_lengths
   # miles v0.1.0 (78527b91) and DeepSeek-V4 additions
   - qkv_format
-allowlisted:  # 34
+allowlisted:  # 33
   - bias_dropout_fusion
   - bias_gelu_fusion
   - bias_swiglu_fusion
@@ -847,7 +848,6 @@ allowlisted:  # 34
   - optimizer_state_offload_chunk_size_mb
   - optimizer_state_offload_fraction
   - optimizer_cpu_offload
-  - optimizer_offload_fraction
   - overlap_cpu_optimizer_d2h_h2d
   - pin_cpu_grads
   - pin_cpu_params
