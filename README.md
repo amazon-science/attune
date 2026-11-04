@@ -14,13 +14,18 @@ harnesses work with adapted launch, metrics and hook scripts.
 
 ## Results
 
-On four models held out from its development, each starting from the strongest public recipe:
-
-- ATTUNE raises mean throughput by 6.7% on Llama-3.1-405B and 33.9% on GLM-4.5 (11.9% and 54.7% in its best
-  campaigns), and keeps Mixtral-8x22B's recipe, where nothing it finds clears the noise band.
-- Under a common GPU-hour budget it beats OptiCo, Bayesian optimization and random search on GLM-4.5 and MiniMax-M2,
-  and on both models the tuning pays for itself within a day of training.
-- The correctness gate rejects no legitimate run and catches 16 of 24 faulty runs.
+- **Production.** In Amazon's production post-training, ATTUNE's recipes raise per-GPU throughput by 1.7× on average
+  and up to 3.9× over expert-tuned recipes, on H100, H200 and B200.
+- **NVIDIA benchmark recipes.** On four NeMo AutoModel benchmark recipes, run unchanged in NVIDIA's container, ATTUNE
+  raises throughput by 7–26%.
+- **Held-out models.** Starting from the strongest public recipe, ATTUNE raises mean throughput by 164% on MiniMax-M2,
+  34% on GLM-4.5 and 6.8% on Llama-3.1-405B, and keeps Mixtral-8x22B's recipe, where no candidate clears the noise
+  band.
+- **Other tuners.** At the same GPU-hour budget it ships faster recipes than OptiCo, Bayesian optimization and random
+  search on MiniMax-M2 and GLM-4.5, and on both models the tuning pays for itself within a day of training.
+- **Correctness.** On runs with a known answer, the gate passes all 460 legitimate runs, refuses all 29 configuration
+  faults and rejects all 5 forward-pass faults. It misses faults that act only through the optimizer update, so it
+  lists every unrecognized change for review.
 
 ## How it works
 
@@ -109,6 +114,21 @@ config.example.env      every setting, one line each
 Bug reports, fixes and new levers are welcome; see [CONTRIBUTING](CONTRIBUTING.md) and the
 [Code of Conduct](CODE_OF_CONDUCT.md). For security issues, see
 [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications).
+
+## Citation
+
+```bibtex
+@misc{fan2026attune,
+  title         = {ATTUNE: Agentic Throughput Tuning for LLM Training},
+  author        = {Leo Fan and Hongyang Wang and Wenbo Chen and Jingguo Liu and Xian Li and Xuan Wang and Ruochen Wen and
+                   Yiming Yan and Hao Wu and Yichuan Li and Qian Qu and Zheshen Wang and Benoit Dumoulin},
+  year          = {2026},
+  eprint        = {2610.17528},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DC},
+  url           = {https://arxiv.org/abs/2610.17528}
+}
+```
 
 ## License
 
