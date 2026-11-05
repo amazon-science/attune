@@ -13,7 +13,7 @@
 
 The control directory, <campaign_dir>/.attune, belongs to launch_campaign.sh: it holds the campaign's copies of the
 skill and the harness, the campaign's config.env and this module's record, integrity.json. The record holds the
-SHA-256 of every protected file: both copies (the lever catalog references/levers.md and the scoring, measurement and
+SHA-256 of every protected file: both copies (the stack's catalog skill/stacks/<stack>/levers.md and failure_triage.md and the scoring, measurement and
 correctness tools and rules among them), config.env, the goal and resume prompts, the rendered .claude/settings.json,
 and the rules directory, frozen-arguments file (with its allowlist, component-test and defect files) and calibration
 file that config.env names outside the copies. For the append-only files (every <campaign_dir>/*/AUTOTUNE_LEDGER.jsonl,
@@ -59,6 +59,7 @@ SKIP_DIRS = frozenset({"__pycache__", ".pytest_cache"})
 SOURCE_DIRS = ("skill", "harness")  # what the launcher copies from the source tree
 DEFAULT_CONTROL = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 VERSION = 1
+DEFAULT_STACK = "megatron"  # skill/stacks/<ATTUNE_STACK>/ holds the stack's catalog and correctness rules
 
 
 # ---- paths -----------------------------------------------------------------------------------------------------
@@ -86,7 +87,14 @@ class Paths:
         j = os.path.join
         self.control = os.path.realpath(control)
         self.skill, self.harness = j(self.control, "skill"), j(self.control, "harness")
-        self.levers = j(self.skill, "references", "levers.md")
+        cfg_path = j(self.control, CONFIG)
+        try:
+            cfg = read_config(cfg_path) if os.path.isfile(cfg_path) else {}
+        except (OSError, ValueError):  # a malformed config.env is reported by the checks that read it
+            cfg = {}
+        self.stack = cfg.get("ATTUNE_STACK") or os.environ.get("ATTUNE_STACK") or DEFAULT_STACK
+        self.levers = j(self.skill, "stacks", self.stack, "levers.md")
+        self.triage = j(self.skill, "stacks", self.stack, "failure_triage.md")
         self.summaries = j(self.skill, "past_tuning_projects")
         self.config, self.record, self.violation = (j(self.control, n) for n in (CONFIG, RECORD, VIOLATION))
         self.campaign = os.path.realpath(campaign) if campaign else None
@@ -580,8 +588,8 @@ def write_rule(path, control, campaign=None, append=()):
     if path in appends or os.path.basename(path) == LEDGER_NAME:
         return "append", "%s is append-only" % path
     lessons = "write proposed lessons to <project_folder>/LESSONS.md (SKILL.md L4c)"
-    if path == p.levers:
-        return "protected", "%s is the campaign's read-only lever catalog; %s" % (path, lessons)
+    if path in (p.levers, p.triage):
+        return "protected", "%s is the campaign's read-only catalog; %s" % (path, lessons)
     source = rec.get("source") if rec else None
     if source and any(_under(path, os.path.join(source, d)) for d in ("skill", "harness")):
         return "protected", ("%s is in the ATTUNE tree the campaign was copied from; its skill is the read-only copy "

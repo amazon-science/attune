@@ -1,9 +1,9 @@
 # Curating campaign lessons
 
-Campaigns never edit the lever catalog, `skill/references/levers.md`. Each campaign writes the lessons it proposes
-to `<project_folder>/LESSONS.md` (`skill/SKILL.md` L4(c)), and its copy of the catalog is read-only: any change to
-it fails the campaign. When a session ends and the campaign passes its integrity check, `launch_campaign.sh` runs
-`harness/lessons.py`, which copies each project folder's file to
+Campaigns never edit the stack's catalog, `skill/stacks/<stack>/levers.md` and `failure_triage.md`. Each campaign
+writes the lessons it proposes to `<project_folder>/LESSONS.md` (`skill/SKILL.md` L4(c)), and its copy of the catalog
+is read-only: any change to it fails the campaign. When a session ends and the campaign passes its integrity check,
+`launch_campaign.sh` runs `harness/lessons.py`, which copies each project folder's file to
 `$ATTUNE_LESSONS_INBOX/<campaign id>/<folder>/LESSONS.md` and writes a `manifest.json` beside the folders: campaign
 id, model, GPU, image and framework as the campaign's settings recorded them at its first launch, catalog version,
 campaign directory, export time, and for each copy its folder, source path and sha256. A later session of the same
@@ -11,6 +11,10 @@ campaign replaces them. With `ATTUNE_LESSONS_INBOX` unset the lessons stay in th
 a campaign that failed its integrity check, whose records cannot be trusted. The inbox must be an absolute path
 outside the campaign directory and outside the ATTUNE tree's `skill/` and `harness/`, which the launcher copies into
 every campaign. The catalog changes only through the pass below.
+
+A lesson about a speed lever goes to the stack's `levers.md`; a lesson about a crash, hang or out-of-memory
+signature goes to its `failure_triage.md`, with an "Observed on" line naming the image or framework commit, the
+hardware and the date. Both go through the same review.
 
 ## The curation pass
 

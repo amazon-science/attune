@@ -94,8 +94,8 @@ def test_the_agents_own_files_are_free(active):
 def test_the_lever_catalog_takes_no_edit_not_even_an_append(active):
     linked = ".claude/skills/autotune-training-throughput"
     (active.root / linked).symlink_to(active.skill)
-    for path in (str(active.skill / "references" / "levers.md"), f"{linked}/references/levers.md"):
-        old = (active.skill / "references" / "levers.md").read_text()
+    for path in (str(active.skill / "stacks" / "megatron" / "levers.md"), f"{linked}/stacks/megatron/levers.md"):
+        old = (active.skill / "stacks" / "megatron" / "levers.md").read_text()
         out = _call("Write", active.root, file_path=path, content=old + "- a new rule\n")
         assert _decision(out) == "deny" and "LESSONS.md" in out, path
         last = old.splitlines(keepends=True)[-1]
@@ -105,12 +105,12 @@ def test_the_lever_catalog_takes_no_edit_not_even_an_append(active):
 
 def test_the_tree_the_campaign_was_copied_from_is_refused(campaign, monkeypatch):
     tree = campaign.tmp / "tree"
-    (tree / "skill" / "references").mkdir(parents=True)
-    (tree / "skill" / "references" / "levers.md").write_text("# levers\n")
+    (tree / "skill" / "stacks" / "megatron").mkdir(parents=True)
+    (tree / "skill" / "stacks" / "megatron" / "levers.md").write_text("# levers\n")
     control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root)}, source=str(tree))
     monkeypatch.setenv("ATTUNE_CONTROL_DIR", str(control))
     monkeypatch.setenv("AUTOTUNE_AUTONOMOUS", "1")
-    out = _call("Write", campaign.root, file_path=str(tree / "skill" / "references" / "levers.md"),
+    out = _call("Write", campaign.root, file_path=str(tree / "skill" / "stacks" / "megatron" / "levers.md"),
                 content="# levers\n- a rule\n")
     assert _decision(out) == "deny" and "copied from" in out
     assert _decision(_call("Write", campaign.root, file_path="proj/LESSONS.md", content="## a\n")) == "allow"

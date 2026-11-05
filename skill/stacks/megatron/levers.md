@@ -85,9 +85,8 @@ choice is bubble vs DP AllReduce.
   Prerequisites asserted in `transformer_config.py`: EP > 1, alltoall or flex dispatcher, bf16, no full recompute
   (selective OK, `--recompute-method`, `--recompute-num-layers` unset), non-legacy grouped GEMM for delay-wgrad, and vpp
   at PP>1 (`virtual_pipeline_model_parallel_size must be specified`), so vpp blockers block it. With TP>1 or CP>1 on
-  Hopper it conflicts with CDMC=1 (Tier env). Memory-hungry (two microbatches' activations), rarely fit
-  (`failure_triage.md`); public writeups report a sizable share of the a2a recoverable. Speculative. *Scope: V15 (H100,
-  H200), F8 (XL; H200, B200); MoE.*
+  Hopper it conflicts with CDMC=1 (Tier env). Public writeups report a sizable share of the a2a recoverable.
+  Speculative. *Scope: V15 (H100, H200), F8 (XL; H200, B200); MoE.*
 - **DeepEP** (`--moe-token-dispatcher-type flex --moe-flex-dispatcher-backend deepep`, or `--moe-enable-deepep` on
   builds that use that flag: check `arguments.py`; needs TP×EP > 1, `deep_ep`, no pad-to-capacity): a clean swap from
   alltoall (same routing; no vpp or recompute change; FP8 dispatch off); the variable-length limit is `allgather`'s.
@@ -154,7 +153,7 @@ planning CP>1.
   that fits, and "fits" means headroom above the cleanup threshold (that PP stalled; one up cleared it). CE fusion frees
   no logits (its entry). *Scope: F8 (B200, H200), V15 at mt 4K–6K (H100, B200); large-vocab MoE. Against: TP2 beat TP1
   at PP1 on V15 (H200); TP1 lost to TP2 on a larger MoE on F8 (H200) and on V15 (H100); on F8 (B200) CE fusion freed
-  nothing and TP1 fit only through more PP.* With no SP its mt ceiling is ≈ TP>1's ÷ TP (`failure_triage.md`). *Scope:
+  nothing and TP1 fit only through more PP.* With no SP its mt ceiling is ≈ TP>1's ÷ TP. *Scope:
   F8; MoE, D HLA; H100, H200, B200.* On LC it reverses: a micro-batch holds the longest row (only CP splits it), its
   logits (tokens × vocab × 4 B / TP) grow with it, and TP1/TP2 ran out of memory where a higher TP with CP fit — size
   logits at the longest row. *Scope: LC; D; B200.*
@@ -346,8 +345,10 @@ Unusable: `--ddp-average-in-collective` (asserts with `--calculate-per-token-los
 
 **Speculative** (exhaust everything above first): intranode DeepEP, EP comm overlap (§b). **CUDA graphs**
 (`--cuda-graph-scope attn`, TE impl) — small: attention and whole-layer capture tied where half the step was
-dependency-stall idle (not launch latency); the legacy flag asserts with EP on expert padding; recompute limits in
-`failure_triage.md`. *Scope: F4 (H100), V15 (H200); MoE.* **`--attention-backend fused`** (cuDNN) is numeric, may ship,
+dependency-stall idle (not launch latency); the legacy flag asserts with EP on expert padding. `--cuda-graph-scope` without
+`--cuda-graph-impl` captures nothing (the impl defaults to `none`), and Megatron captures TE graphs only in its own
+training loop (`TECudaGraphHelper`), which slime and miles replace: check the image for a capture call before reading a
+result. *Scope: F4 (H100), V15 (H200); MoE.* **`--attention-backend fused`** (cuDNN) is numeric, may ship,
 listed for review: NaN grads with low GQA + fp32 softmax; where clean and faster its loss drifted up late beyond rerun
 noise, which the 20-step check misses — cite it, confirm with a longer loss run. *Scope: NaN V15 (H100, H200), drift F8
 (B200); MoE.*
@@ -410,7 +411,7 @@ a2a), a tie at 64 experts — test one step each way. *Scope: F8; MoE; H200.*
 
 **Last-resort memory:** drop mt (most activation-sensitive; on fixed rows only a whole-row drop frees memory, as an
 over-mt row gets its own microbatch). `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` enables fits at a cost from
-none to large (`failure_triage.md`): it reclaims a few GiB of fragmentation, fitting some configs and leaving others a
+none to large: it reclaims a few GiB of fragmentation, fitting some configs and leaving others a
 few hundred MiB short; at saturated memory it thrashed several times slower. *Scope: F8 (1n H100), F4 (H100), V15
 (H200); MoE.*
 

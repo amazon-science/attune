@@ -5,7 +5,7 @@
 
     layer1.py <base train.log> <candidate train.log> [--frozen-args FILE] [--image REF]   # exit 0 pass, 1 fail
 
-The rules dir (frozen_args.rules_dir(): $AUTOTUNE_RULES_DIR, else rules/ beside this file; rules/README.md gives the
+The rules dir (frozen_args.rules_dir(): $AUTOTUNE_RULES_DIR, else skill/stacks/<stack>/correctness/rules/; its README.md gives the
 formats) holds numerics_list.yaml, which classes every argument. The setup's directory is the one holding the
 frozen-arguments file (--frozen-args, else $AUTOTUNE_FROZEN_ARGS; by convention rules/layer1/<setup>/frozen_args.yaml);
 its allowlist.yaml admits same-math swaps, its ct_status.yaml records their component tests and its defects.yaml lists

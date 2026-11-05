@@ -117,7 +117,7 @@ appear as SKILL.md Invariants/gotchas — repeated here as a scan-able checklist
 1. **No hypothesis, no run.** "Try FP8" isn't one; "FP8 should help — matmul is now the dominant share of step time, vs negligible when it was last tried" is.
 2. **One variable per run.** Changing topology + batch + recompute together tells you nothing about which lever moved the needle. Exception: tightly-coupled flags (call the coupling out).
 3. **Don't kill on noise.** Legit early-kills: the benchmark step cap, diagnosed crash, confirmed hang, or a *decisive* loss once step-time has settled. Not "looks slow" hunches — a slow-but-stable run is still a data point.
-4. **Failures are signal, not "flaky."** Look a crash or timeout signature up in `failure_triage.md` before relaunching; an NCCL error at init with no memory signal is often GPU OOM, not the network.
+4. **Failures are signal, not "flaky."** Look a crash or timeout signature up in the stack's `failure_triage.md` (`stacks/<stack>/`) before relaunching; an NCCL error at init with no memory signal is often GPU OOM, not the network.
 
 **Record-keeping**
 5. **Keep `RESULTS.md` in sync with the ledger.** The ledger is the append-only audit trail; `RESULTS.md` is the human's morning view. Decoupling them loses runs between sessions.

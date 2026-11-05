@@ -52,7 +52,7 @@ def test_the_manifest_comes_from_the_campaigns_settings_not_the_shell(campaign):
     assert (manifest["model"], manifest["gpu"], manifest["image"], manifest["framework"]) == (
         "m", "H100", "img@sha256:0", "slime 0.3")
     sealed_levers = json.loads((control / integrity.RECORD).read_text())["files"][
-        str(control / "skill" / "references" / "levers.md")]
+        str(control / "skill" / "stacks" / "megatron" / "levers.md")]
     assert manifest["catalog_version"] == {"levers_sha256": sealed_levers, "commit": None, "dirty": None}
 
 

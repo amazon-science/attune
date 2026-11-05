@@ -20,7 +20,7 @@ resolved (layer 1 compares the two arms). `env` freezes pod environment variable
 pre-launch in container env, runtimeEnvYAML env_vars and `export NAME=` lines. `couplings` (conditional rules, e.g.
 "when X is on, Y must be set") are evaluated by couplings.py beside this file (`violations(spec, get)`), both
 pre-launch and at layer 1; a spec whose couplings cannot be evaluated fails closed. The file's directory is the
-setup's layer-1 directory (rules/README.md).
+setup's layer-1 directory (the stack's correctness/rules/README.md).
 
 Two checks share the spec:
   check_resolved(args)  layer 1 of the correctness check, on the resolved-argument dump of a run's log;
@@ -42,14 +42,22 @@ import sys
 
 ENV = "AUTOTUNE_FROZEN_ARGS"
 # The layer-1 rule lists (numerics_list.yaml, layer1/<setup>/): RULES_DIR when set (tests), else $AUTOTUNE_RULES_DIR,
-# else rules/ beside this file, resolved when used (after a campaign's settings are in place).
+# else the stack's skill/stacks/<$ATTUNE_STACK>/correctness/rules/, resolved when used (after a campaign's settings
+# are in place).
 HERE = os.path.dirname(os.path.abspath(__file__))
+SKILL = os.path.dirname(os.path.dirname(HERE))
+DEFAULT_STACK = "megatron"
 sys.path.insert(1, os.path.dirname(HERE))  # campaign.py
 RULES_DIR = None
 
 
+def stack():
+    return os.environ.get("ATTUNE_STACK") or DEFAULT_STACK
+
+
 def rules_dir():
-    return RULES_DIR or os.environ.get("AUTOTUNE_RULES_DIR") or os.path.join(HERE, "rules")
+    return (RULES_DIR or os.environ.get("AUTOTUNE_RULES_DIR")
+            or os.path.join(SKILL, "stacks", stack(), "correctness", "rules"))
 
 
 class SpecError(Exception):

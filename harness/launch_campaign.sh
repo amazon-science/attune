@@ -16,7 +16,7 @@
 #   2. Copies $ATTUNE_HOME/skill and $ATTUNE_HOME/harness into the launcher's control directory
 #      <campaign_dir>/.attune, writes the campaign's settings there as config.env, and links the skill copy as
 #      <campaign_dir>/.claude/skills/autotune-training-throughput. The copies are read-only except
-#      skill/past_tuning_projects/ (new summaries); the lever catalog references/levers.md is read-only too, and the
+#      skill/past_tuning_projects/ (new summaries); the stack's catalog skill/stacks/<stack>/ is read-only too, and the
 #      campaign proposes lessons in <project_folder>/LESSONS.md instead.
 #   3. Renders the copy's settings.template.json into <campaign_dir>/.claude/settings.json (the environment, the
 #      PreToolUse guard and Stop hook of the harness copy, the denied tools; WebSearch and WebFetch are denied only
@@ -102,7 +102,13 @@ else
   SRC=$ATTUNE_HOME
   [ -f "$SRC/harness/integrity.py" ] && [ -f "$SRC/skill/SKILL.md" ] \
     || die "ATTUNE_HOME ($ATTUNE_HOME) has no skill/ and harness/"
+  ATTUNE_STACK=${ATTUNE_STACK:-megatron}   # skill/stacks/<stack>/: the stack's lever catalog, failure triage, rules
+  [[ $ATTUNE_STACK =~ ^[a-z0-9][-a-z0-9_]*$ ]] && [ -f "$SRC/skill/stacks/$ATTUNE_STACK/levers.md" ] \
+    && [ -f "$SRC/skill/stacks/$ATTUNE_STACK/correctness/rules/numerics_list.yaml" ] \
+    || die "ATTUNE_STACK=$ATTUNE_STACK names no supported stack in $SRC/skill/stacks/" \
+           "(it needs levers.md and correctness/rules/numerics_list.yaml)"
 fi
+export ATTUNE_STACK=${ATTUNE_STACK:-megatron}   # a later launch keeps the stack its config.env recorded
 
 for v in AUTOTUNE_USER AUTOTUNE_KUBECTL_CONTEXT KUBECTL_NS AUTOTUNE_NUM_GPUS AUTOTUNE_BUDGET ATTUNE_RUN_PREFIX \
          AUTOTUNE_LOG_POD; do

@@ -32,7 +32,7 @@ To use the skill interactively instead, copy `skill/` to `.claude/skills/autotun
 project and ask Claude Code to tune your training job.
 
 On a different stack, list which of its arguments change training in
-`skill/scripts/correctness/rules/numerics_list.yaml` (see `rules/README.md`), so the gate knows what to refuse.
+`skill/stacks/<stack>/correctness/rules/numerics_list.yaml` (see `rules/README.md`), so the gate knows what to refuse.
 
 ## Before you run it
 
@@ -44,7 +44,7 @@ cost was about $60 to $110 at list price in our evaluation.
 ## How it works
 
 - **Search.** The agent diagnoses each run (communication, pipeline bubbles, memory, kernel launches) and picks the
-  next change with the help of the lever catalog, `skill/references/levers.md`.
+  next change with the help of the lever catalog, `skill/stacks/<stack>/levers.md`.
 - **Measurement.** Every candidate runs the same workload and replaces the leader only if it is faster by more than
   a 3% noise band.
 - **Correctness.** A configuration check refuses changes to the training objective and known stack defects, and a
@@ -57,7 +57,11 @@ cost was about $60 to $110 at list price in our evaluation.
 ```
 skill/                  the skill
   SKILL.md                tuning loop, ranking rules, state contract, stop rule
-  references/             lever catalog, measurement, failure triage, ledger schema, topology check
+  references/             measurement, ledger schema, topology check, glossary
+  stacks/<stack>/         one folder per training stack (ATTUNE_STACK, default megatron)
+    levers.md               lever catalog
+    failure_triage.md       crash and hang signatures, with the image and hardware they were seen on
+    correctness/rules/      which arguments change the training objective
   scripts/                launch, poll, metrics, teardown, GPU-hour accounting, profile analysis
     correctness/            the correctness gate
     data/                   fixed-length SFT row builder, loss masks, rollout adapter, token-length analysis

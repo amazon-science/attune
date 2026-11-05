@@ -8,7 +8,7 @@ one campaign to the next.
 The directory ships empty. A summary records one campaign's model, hardware, baseline and winner
 throughput, what won, tied and lost, gotchas, untried ideas, and the absolute path of the campaign's
 artifacts. Those are operator-local facts: keep summaries out of any shared or published copy of the
-skill. Their generalizable rules reach `references/levers.md` only as lessons: the campaign writes them to
+skill. Their generalizable rules reach the stack's `stacks/<stack>/levers.md` only as lessons: the campaign writes them to
 `<project_folder>/LESSONS.md` (L4(c) of `SKILL.md`), and a curation pass after the campaign admits the few
 that hold up (`harness/CURATION.md`).
 

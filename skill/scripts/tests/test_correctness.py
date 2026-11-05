@@ -14,7 +14,8 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 CORRECTNESS = HERE.parent / "correctness"
-EXAMPLE = CORRECTNESS / "rules" / "layer1" / "example"
+RULES = HERE.parent.parent / "stacks" / "megatron" / "correctness" / "rules"
+EXAMPLE = RULES / "layer1" / "example"
 sys.path.insert(0, str(CORRECTNESS))
 sys.path.insert(0, str(HERE))
 import fixtures  # noqa: E402
@@ -75,7 +76,7 @@ def test_numeric_and_unlisted_changes_pass_layer1_as_unknown():
 
 
 def test_objective_class_holds_the_objective_names():
-    nl = yaml.safe_load((CORRECTNESS / "rules" / "numerics_list.yaml").read_text())
+    nl = yaml.safe_load((RULES / "numerics_list.yaml").read_text())
     assert len(OBJECTIVE) == len(set(OBJECTIVE)) == 182 and sorted(nl["objective"]) == sorted(OBJECTIVE)
     for n in ("fp8_param_gather", "fp4_param_gather", "tp_only_amax_red", "fp8_interval",
               "megatron_fsdp_main_grads_dtype", "megatron_fsdp_main_params_dtype", "megatron_fsdp_grad_comm_dtype"):
@@ -112,7 +113,7 @@ def test_a_name_only_one_dump_has_is_unknown():
 def test_numerics_list_classes_each_name_once_and_counts_match():
     import re
 
-    text = (CORRECTNESS / "rules" / "numerics_list.yaml").read_text()
+    text = (RULES / "numerics_list.yaml").read_text()
     nl = yaml.safe_load(text)
     names = [n for k in layer1.CLASSES for n in nl.get(k) or []]
     assert len(names) == len(set(names))
@@ -129,7 +130,7 @@ def test_numerics_list_classes_each_name_once_and_counts_match():
                                        ("flight_recorder_dump_path", "ignored")])
 def test_miles_bfdcff0e_arguments_are_classed(name, cls):
     """miles bfdcff0e and its Megatron-LM: new names classed, uncertain ones numeric."""
-    assert layer1.classify(name, layer1.load_classes(CORRECTNESS / "rules")) == cls
+    assert layer1.classify(name, layer1.load_classes(RULES)) == cls
 
 
 VOCAB = {"make_vocab_size_divisible_by": "128", "tensor_model_parallel_size": "4"}
@@ -219,7 +220,7 @@ def _image_rules(tmp_path, monkeypatch, ct="CT-grouped-gemm: pass", allowlist=No
     rules = tmp_path / "rules"
     idir = rules / "images" / PREFIX
     idir.mkdir(parents=True)
-    shutil.copy(CORRECTNESS / "rules" / "numerics_list.yaml", rules / "numerics_list.yaml")
+    shutil.copy(RULES / "numerics_list.yaml", rules / "numerics_list.yaml")
     if allowlist is None:
         shutil.copy(EXAMPLE / "allowlist.yaml", idir / "allowlist.yaml")
     else:
@@ -682,3 +683,14 @@ def test_couplings_fail_closed():
             "raw": {"couplings": [{"id": "x", "kind": "nope"}]}}
     v = frozen_args.check_resolved(spec, {"seed": "1"})
     assert v and v[0]["arg"] == "couplings" and "unknown kind" in v[0]["why"]
+
+
+def test_rules_dir_follows_the_stack(monkeypatch):
+    monkeypatch.setattr(frozen_args, "RULES_DIR", None)
+    monkeypatch.delenv("AUTOTUNE_RULES_DIR", raising=False)
+    monkeypatch.delenv("ATTUNE_STACK", raising=False)
+    assert os.path.realpath(frozen_args.rules_dir()) == os.path.realpath(RULES)  # megatron by default
+    monkeypatch.setenv("ATTUNE_STACK", "torchtitan")
+    assert frozen_args.rules_dir().endswith(os.path.join("skill", "stacks", "torchtitan", "correctness", "rules"))
+    monkeypatch.setenv("AUTOTUNE_RULES_DIR", "/elsewhere/rules")  # an explicit rules dir still wins
+    assert frozen_args.rules_dir() == "/elsewhere/rules"

@@ -44,7 +44,7 @@ Skip any step whose durable output exists; a valid `baseline` ledger row means b
 B0. Find authoritative recipes for the model (exact model, then nearest architecture/size; vendor/framework
     repos over blogs). With web access (on by default; evaluation campaigns turn it off with
     `AUTOTUNE_ALLOW_WEB=0`) search the internet; without it, use the recipes and references available locally or
-    provided by the operator (`references/levers.md` §a lists the upstream sources) and make no network requests.
+    provided by the operator (`stacks/<stack>/levers.md` §a lists the upstream sources) and make no network requests.
     Record dated sources + GPU count/type, topology, batch, seq-len, precision, recompute, offload in `RESULTS.md`,
     noting what transfers.
 B1. Fix and characterize the ranking workload. The operator defines the workload and the measurement: the
@@ -90,7 +90,7 @@ B1. Fix and characterize the ranking workload. The operator defines the workload
     micro-batch, so a smaller value still runs. Size activation and logits memory for that micro-batch (the
     script prints its tokens per GPU at each CP, and its fp32 logits given `--vocab-size`, which pre-tokenized
     rows need because they load no tokenizer), and treat lessons scoped to fixed rows (F2, F4, F8, F32 in
-    `references/levers.md`) as hypotheses.
+    `stacks/<stack>/levers.md`) as hypotheses.
 B2. GPU count = the recipe's own count, fixed for the whole campaign: the GPU count is not a tuning dimension
     (see Invariants). Dry-run to confirm the count is feasible: it must satisfy model-memory, topology/world-size, layer/expert
     divisibility, `global_batch_size >= DP`, and the image's ACTUAL expert rank-fold placement (verify
@@ -114,7 +114,7 @@ to fill idle slots up to the cap) and L4 (harvest each run as it finishes) run c
 block the whole loop waiting on one job — keep free slots full while others run, and finalize each
 completion independently.
 
-The lessons in `references/levers.md` and the Search discipline rules below come from a mix of fixed-length
+The lessons in `stacks/<stack>/levers.md` and the Search discipline rules below come from a mix of fixed-length
 (mostly fixed 8K) and variable-length campaigns; each entry's scope tag says which, and a lesson measured in one
 regime is a hypothesis to test in another. The loop and stop rules are process rules; the measured facts they cite
 come from fixed 4K and fixed 8K campaigns (H100, H200, B200), and the claim that a flag win rarely transfers across
@@ -124,7 +124,7 @@ topologies also from lever directions that flipped between fixed 8K and variable
 L1. Read ledger + RESULTS.md + data_insights.md + LESSONS.md + the skill's `past_tuning_projects/*_summary.md`
     (priors from prior projects, if any) + references/ledger.md (ledger schema, anti-patterns)
     → current best, what's tried, priors, and which topology family to favor.
-    **Read `references/levers.md` IN FULL once per session before your first hypothesis** (it is the
+    **Read `stacks/<stack>/levers.md` IN FULL once per session before your first hypothesis** (it is the
     cross-project heuristic catalog — priority ladder, MoE folding, profile→lever table, per-lever
     mechanisms/failure-modes). Do not form an L2 hypothesis without having loaded it — a "remembered"
     lever is stale.
@@ -133,7 +133,7 @@ L2. Choose the next experiment(s) with your own tuning judgement — there is NO
     last slot, never for coverage of the search space. Ground the decision in four sources of context,
     then pick the hypothesis with the highest expected `tok/s/GPU` gain × confidence:
       1. **Profile** — the latest bottleneck (L4), when you have one: what actually limits the current leader.
-      2. **Best practice** — `references/levers.md` (priority ladder, MoE folding, profile→lever table).
+      2. **Best practice** — `stacks/<stack>/levers.md` (priority ladder, MoE folding, profile→lever table).
       3. **History** — this project's ledger/RESULTS.md + `past_tuning_projects/*_summary.md`: what
          already won/tied/lost here and in prior projects (don't relearn a known dead end).
       4. **Real tuning space** — the flags actually present in the image's `arguments.py`/source.
@@ -188,7 +188,7 @@ L4. On each finished run, do BOTH:
     (c) **Propose conclusive insights as lessons.** If the run established a *generalizable* fact about a
         lever — its mechanism, when it helps or hurts, a failure mode, an interaction, or a saturation/quantization
         boundary (e.g. fixed-length mt step-function) — add it to `<project_folder>/LESSONS.md` in the same
-        commit as the ledger row. When in doubt whether it generalizes, add it. Never edit `references/levers.md`:
+        commit as the ledger row. When in doubt whether it generalizes, add it. Never edit `stacks/<stack>/levers.md`:
         it is the campaign's read-only catalog, and under the launcher any change to it fails the campaign.
         One entry per lesson:
           ## <the claim in one line>
@@ -269,7 +269,7 @@ L5. Goto L1.
     different implementation of the same function. Correctness layer 1 accepts one where the setup's allowlist
     lists that argument and value and its component test passed. The allowlist is the `allowlist.yaml` beside
     the frozen-arguments file `$AUTOTUNE_FROZEN_ARGS` (by convention `rules/layer1/<setup>/`,
-    `scripts/correctness/rules/README.md`), plus `rules/images/<digest prefix>/allowlist.yaml` for swaps
+    `stacks/<stack>/correctness/rules/README.md`), plus `rules/images/<digest prefix>/allowlist.yaml` for swaps
     tested on the image, which apply to every model on it when the pair's `images.json` (written by
     `pair_from_runs.py`) names that image, pinned by digest, for both runs. Layer 1 refuses a swap whose
     component test failed in either directory or that puts the candidate in a known stack defect state
@@ -304,7 +304,7 @@ the band is `$AUTOTUNE_BAND` and Δ vs baseline is taken against this campaign's
 | > +b, validity gates pass | **win** — promote as the new leader |
 | −b … +b | **tie** — document it, do not rerun, and move to a new experiment |
 | < −b | **lose** |
-| crashed before any `perf N:` | **error** (triage: `references/failure_triage.md`) |
+| crashed before any `perf N:` | **error** (triage: `stacks/<stack>/failure_triage.md`) |
 | RayJob SUCCEEDED but `latest_step` below the run's target (N-1 unprofiled, N+1+K profiled; 19 and 22 at the defaults) | **error** — incomplete benchmark or a swallowed actor crash; never trust SUCCEEDED alone |
 
 Each recipe gets one ranked run; reruns are not part of search or convergence. The one other run a recipe can get is
@@ -365,7 +365,7 @@ interruption is always safe to resume:
 - **api-error** (cluster unreachable): do nothing, keep the line, retry on the next poll. This is **not**
   absence — never treat it as a finished/gone run.
 - **absent** (a *successful* query returned nothing): drop the line.
-- **stuck** (no new perf line for 10 minutes): triage it as a hang (`failure_triage.md`, `measurement.md` §10); a
+- **stuck** (no new perf line for 10 minutes): triage it as a hang (`stacks/<stack>/failure_triage.md`, `measurement.md` §10); a
   confirmed hang is finalized as `errored` (above), which tears it down.
 - **done-unknown** (RayJob SUCCEEDED, no log found): keep the line and find the log under
   `$AUTOTUNE_EXPERIMENTS_DIR/<run_id>/logs/` on the log-access pod; if it is lost, finalize the run as `errored`.
@@ -519,13 +519,15 @@ lesson the campaign established (L4c); the launcher exports that file, not the s
 - **Pin the image by digest, not tag** — floating tags re-tag silently; a head/worker digest mismatch wedges
   workers at `Init:0/1`. If the baseline YAML names a tag, ask the operator to pin its digest
   (`crane digest <image>` or `skopeo inspect docker://<image>` resolves one). Source patches must be baked into
-  the image (Dockerfile), not sed'd in run-training.sh (Ray actors load the image, not the head pod).
+  the image (Dockerfile), not sed'd in run-training.sh (Ray actors load the image, not the head pod). A patched
+  image needs the operator's approval: build it `FROM` the baseline's digest with only the needed source changes,
+  push it under a new tag, and rerun the baseline on it before ranking against it.
 - **The image must carry slime's PyTorch profiler controls for a profiled run to write a trace.** Verify by
   reading the image's source, not by grepping for a flag literal — CLI flags are often dataclass-derived
   (`profile_step_start` → `--profile-step-start`), so a flag grep gives false negatives. Check the source
   instead (e.g. `use_pytorch_profiler` in slime's `profile_utils.py`, levers.md "Profiler operability").
   Genuinely absent ⇒ profiled runs on that image write no trace; ask the operator for an image that carries
-  the controls (`failure_triage.md`, "Building a patched image").
+  the controls (Pin the image by digest, above).
 - **Logs are read through the operator's log-access pod** `$AUTOTUNE_LOG_POD`, a long-lived pod with the
   shared volume mounted (`measurement.md` §1). If it is missing, ask the operator.
 - **Cluster credentials** may expire mid-run: treat poll `api-error` as retry, not absence, and report a
@@ -551,7 +553,7 @@ diagnostic arms), `run_gpuh.py` and `calibration.py` are frozen
 and authoritative, so only their results decide the shipped recipe. Under the launcher the skill directory is the
 campaign's read-only copy, and it takes only one record you add to it: the closeout summary
 `past_tuning_projects/<project_tag>_<campaign_id>_summary.md` (a new file; the summaries already there stay as they
-are). Lessons go to `<project_folder>/LESSONS.md` (L4c), never into `references/levers.md`. The launcher
+are). Lessons go to `<project_folder>/LESSONS.md` (L4c), never into `stacks/<stack>/levers.md`. The launcher
 records the hashes of the copy (`levers.md` included), the campaign's settings and prompts, and the ledger and
 GPU-hour log as far as they have been written; any other change fails the campaign, and no recipe ships from it.
 
@@ -615,15 +617,21 @@ Listed in the order you use them in a cycle — what each does and when to call 
   completed run's metrics validate and its ledger row is appended; only once it exits 0 do you remove
   the run's `tracked_jobs.jsonl` line (state contract).
 
-## References (`references/<name>.md`)
+## References
 
-One topic each:
-- **`glossary.md`** — TP/PP/EP/ETP/CP/DP, mt, bs, vpp, MFU, IQR, slime. Read first if new to the terms.
-- **`levers.md`** — **which flags to tune, what they do, when they help or hurt, and the authoritative
-  upstream docs** (Megatron MoE playbook, Ultrascale, NeMo, arguments.py). Priority ladder, MoE
+The stack's catalog lives in `stacks/<stack>/`, where `<stack>` is `$ATTUNE_STACK` (`megatron` by default:
+Megatron-LM with slime or miles). Each stack keeps its own lever catalog, failure triage and correctness rules:
+- **`stacks/<stack>/levers.md`** — **which flags to tune, what they do, when they help or hurt, and the
+  authoritative upstream docs** (for Megatron: MoE playbook, Ultrascale, NeMo, arguments.py). Priority ladder,
   parallel folding + intranode rule, profile→bottleneck table, lever catalog. Read before forming hypotheses.
+- **`stacks/<stack>/failure_triage.md`** — crash/hang signatures seen on this stack, each with the image and
+  hardware it was observed on. Treat an entry as a hint to check on your image, not as a rule; signatures change
+  with the image, the hardware and the nodes.
+- **`stacks/<stack>/correctness/rules/`** — which arguments change the training objective (layer 1).
+
+The stack-independent references (`references/<name>.md`), one topic each:
+- **`glossary.md`** — TP/PP/EP/ETP/CP/DP, mt, bs, vpp, MFU, IQR, slime. Read first if new to the terms.
 - **`measurement.md`** — workload and measurement settings, log locations + log-access pod, `perf N:` fields,
   the aggregate metric, sanity checks, profiling + NCCL decoder, compile-tail-vs-stall, hang diagnosis.
 - **`ledger.md`** — ledger entry schema + anti-patterns checklist.
 - **`print_topology.md`** — topology-placement verification from the Megatron source and NCCL logs.
-- **`failure_triage.md`** — crash/hang signatures and fixes, and what a patched image needs (built FROM the baseline's image, with the operator's approval).

@@ -216,7 +216,7 @@ def test_one_campaign_through_the_documented_loop(campaign):
                   verdict="tie", compared_leader_run_id="alice-tune-proj-h100-base", delta_vs_leader_pct=0.0,
                   delta_vs_baseline_pct=0.0))
     edit("proj-h100/RESULTS.md", "| base | 37.5 |\n", "| base | 37.5 |\n| tp1 | 37.5 (tie) |\n")
-    levers = ".claude/skills/autotune-training-throughput/references/levers.md"
+    levers = ".claude/skills/autotune-training-throughput/stacks/megatron/levers.md"
     last = (root / levers).read_text().splitlines(keepends=True)[-1]
     assert tool("Edit", file_path=levers, old_string=last, new_string=last + "- a lesson\n") == "deny"
     lesson = "## TP1 ties TP2 when attention TP traffic is already overlapped\n- Evidence: alice-tune-proj-h100-tp1\n"

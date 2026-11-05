@@ -48,10 +48,10 @@ def unlock(path):
         os.chmod(d, os.stat(d).st_mode | stat.S_IWUSR)
 
 
-TINY_SKILL = {"SKILL.md": "# skill\n", "references/levers.md": "# levers\n- a rule\n",
+TINY_SKILL = {"SKILL.md": "# skill\n", "stacks/megatron/levers.md": "# levers\n- a rule\n",
               "references/measurement.md": "# measurement\n", "scripts/read_metrics.sh": "echo metrics\n",
               "scripts/teardown_run.sh": 'echo "$1" >> "$TEARDOWN_LOG"; [ "$1" != alice-tune-stuck ]\n',
-              "scripts/correctness/rules/numerics_list.yaml": "numeric: []\n",
+              "stacks/megatron/correctness/rules/numerics_list.yaml": "numeric: []\n",
               "past_tuning_projects/README.md": "# past\n",
               "past_tuning_projects/proj_summary.md": "# an earlier campaign\n"}
 CAMPAIGN_ID = "alice-tune-20261015-120000-3fa2"

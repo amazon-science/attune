@@ -40,7 +40,7 @@ def test_an_untouched_campaign_passes(sealed):
     assert str(sealed.skill / "SKILL.md") in rec["files"]
     assert str(sealed.control / "config.env") in rec["files"]
     assert str(sealed.root / ".claude" / "settings.json") in rec["files"]
-    assert str(sealed.skill / "references" / "levers.md") in rec["files"]
+    assert str(sealed.skill / "stacks" / "megatron" / "levers.md") in rec["files"]
     assert str(sealed.root / "gpuh.jsonl") in rec["append_only"] and len(rec["append_only"]) == 1
     assert not os.access(sealed.control / integrity.RECORD, os.W_OK)
 
@@ -74,14 +74,14 @@ def test_append_only_files_keep_what_was_seen(sealed, change):
 
 @pytest.mark.parametrize("mode,text", [("a", "- an appended rule\n"), ("w", "# levers\n- the rule, reworded\n")])
 def test_the_lever_catalog_is_read_only(sealed, mode, text):
-    levers = sealed.skill / "references" / "levers.md"
+    levers = sealed.skill / "stacks" / "megatron" / "levers.md"
     assert not os.access(levers, os.W_OK)
     edit(levers, text, mode)
     assert problems(sealed) == [{"path": str(levers), "problem": "modified"}]
 
 
 @pytest.mark.parametrize("rel", ["skill/SKILL.md", "skill/scripts/read_metrics.sh",
-                                 "skill/scripts/correctness/rules/numerics_list.yaml", "harness/integrity.py",
+                                 "skill/stacks/megatron/correctness/rules/numerics_list.yaml", "harness/integrity.py",
                                  "config.env"])
 def test_a_protected_file_that_changes_fails(sealed, rel):
     edit(sealed.control / rel, "changed\n")
@@ -183,7 +183,7 @@ def test_rule_files_inside_the_skill_copy_are_protected(campaign):
     skill = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "skill")
     control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root)}, skill=skill)
     assert integrity.check(str(control)) == []
-    path = control / "skill" / "scripts" / "correctness" / "rules" / "layer1" / "example" / "ct_status.yaml"
+    path = control / "skill" / "stacks" / "megatron" / "correctness" / "rules" / "layer1" / "example" / "ct_status.yaml"
     os.chmod(path, 0o644)
     path.write_text("tests: {}\n")
     assert [p["path"] for p in integrity.check(str(control))] == [str(path)]
@@ -254,7 +254,7 @@ def test_cli_exit_codes(sealed):
 
 @pytest.mark.parametrize("path,kind", [
     ("skill/SKILL.md", "protected"), ("harness/hooks/stop_gate.py", "protected"), ("config.env", "protected"),
-    ("integrity.json", "protected"), ("skill/references/levers.md", "protected"),
+    ("integrity.json", "protected"), ("skill/stacks/megatron/levers.md", "protected"),
     ("skill/past_tuning_projects/README.md", "protected"), ("skill/past_tuning_projects/p_summary.md", None),
     ("skill/scripts/new.py", "protected")])
 def test_write_rule_in_the_control_directory(sealed, path, kind):
@@ -270,8 +270,25 @@ def test_write_rule_in_the_campaign_directory(sealed, rel, kind):
 
 
 def test_the_lever_catalog_points_to_lessons(sealed):
-    kind, why = integrity.write_rule(str(sealed.skill / "references" / "levers.md"), str(sealed.control))
+    kind, why = integrity.write_rule(str(sealed.skill / "stacks" / "megatron" / "levers.md"), str(sealed.control))
     assert kind == "protected" and "LESSONS.md" in why
+
+
+def test_the_failure_triage_points_to_lessons(sealed):
+    path = sealed.skill / "stacks" / "megatron" / "failure_triage.md"
+    kind, why = integrity.write_rule(str(path), str(sealed.control))
+    assert kind == "protected" and "read-only catalog" in why and "LESSONS.md" in why
+
+
+def test_paths_follow_the_campaign_stack(tmp_path, monkeypatch):
+    monkeypatch.delenv("ATTUNE_STACK", raising=False)
+    control = tmp_path / ".attune"
+    control.mkdir()
+    assert integrity.Paths(str(control)).levers.endswith("skill/stacks/megatron/levers.md")  # the default
+    (control / "config.env").write_text("ATTUNE_STACK=torchtitan\n")
+    p = integrity.Paths(str(control))
+    assert p.levers.endswith("skill/stacks/torchtitan/levers.md")
+    assert p.triage.endswith("skill/stacks/torchtitan/failure_triage.md")
 
 
 def test_the_source_tree_is_recorded_and_refused(campaign):
@@ -283,7 +300,7 @@ def test_the_source_tree_is_recorded_and_refused(campaign):
     control = seal_campaign(root, {"CAMPAIGN_DIR": str(root)}, source=str(tree))
     rec = json.loads((control / integrity.RECORD).read_text())
     assert rec["source"] == str(tree) and rec["source_commit"] is None   # not a git checkout
-    for rel in ("skill/references/levers.md", "skill/past_tuning_projects/p_summary.md", "harness/integrity.py"):
+    for rel in ("skill/stacks/megatron/levers.md", "skill/past_tuning_projects/p_summary.md", "harness/integrity.py"):
         kind, why = integrity.write_rule(str(tree / rel), str(control))
         assert kind == "protected" and "copied from" in why and "LESSONS.md" in why, rel
     for path in (tree / "README.md", root / "proj" / "LESSONS.md"):
@@ -320,7 +337,7 @@ def test_the_source_commit_and_dirty_flag_are_recorded(campaign):
 
 def _tree_campaign(campaign):
     tree = campaign.tmp / "tree"
-    for rel in ("skill/references/levers.md", "skill/SKILL.md", "harness/integrity.py"):
+    for rel in ("skill/stacks/megatron/levers.md", "skill/SKILL.md", "harness/integrity.py"):
         (tree / rel).parent.mkdir(parents=True, exist_ok=True)
         (tree / rel).write_text("# %s\n" % rel)
     control = seal_campaign(campaign.root, {"CAMPAIGN_DIR": str(campaign.root)}, source=str(tree))
@@ -330,16 +347,16 @@ def _tree_campaign(campaign):
 def test_a_bash_write_into_the_source_tree_is_reported_not_failed(campaign):
     tree, control = _tree_campaign(campaign)
     rec = json.loads((control / integrity.RECORD).read_text())
-    assert set(rec["source_files"]) == {"skill/references/levers.md", "skill/SKILL.md", "harness/integrity.py"}
+    assert set(rec["source_files"]) == {"skill/stacks/megatron/levers.md", "skill/SKILL.md", "harness/integrity.py"}
     assert integrity.source_check(str(control), "first") == []
-    with open(tree / "skill" / "references" / "levers.md", "a") as f:   # cat >> levers.md <<'EOF'
+    with open(tree / "skill" / "stacks" / "megatron" / "levers.md", "a") as f:   # cat >> levers.md <<'EOF'
         f.write("- a rule\n")
     (tree / "skill" / "SKILL.md").unlink()
     (tree / "harness" / "new.py").write_text("")
     (tree / "harness" / "__pycache__").mkdir()
     (tree / "harness" / "__pycache__" / "integrity.cpython-310.pyc").write_bytes(b"")   # caches are skipped
     changes = [{"path": "skill/SKILL.md", "problem": "deleted"},
-               {"path": "skill/references/levers.md", "problem": "modified"},
+               {"path": "skill/stacks/megatron/levers.md", "problem": "modified"},
                {"path": "harness/new.py", "problem": "added"}]
     assert integrity.source_check(str(control), "second") == changes
     assert integrity.check(str(control)) == [] and not (control / integrity.VIOLATION).exists()
@@ -360,13 +377,13 @@ def test_source_check_cli(campaign, sealed, capsys):
     root = campaign.tmp / "c2"
     (root / "proj").mkdir(parents=True)
     tree = campaign.tmp / "tree"
-    (tree / "skill" / "references").mkdir(parents=True)
-    (tree / "skill" / "references" / "levers.md").write_text("# levers\n")
+    (tree / "skill" / "stacks" / "megatron").mkdir(parents=True)
+    (tree / "skill" / "stacks" / "megatron" / "levers.md").write_text("# levers\n")
     control = seal_campaign(root, {"CAMPAIGN_DIR": str(root)}, source=str(tree))
     assert integrity.main(["source-check", str(control)]) == 0
     assert "unchanged since launch" in capsys.readouterr().out
-    (tree / "skill" / "references" / "levers.md").write_text("# levers\n- a rule\n")
+    (tree / "skill" / "stacks" / "megatron" / "levers.md").write_text("# levers\n- a rule\n")
     assert integrity.main(["source-check", str(control), "--where", "session end"]) == 0
     err = capsys.readouterr().err
     assert err.startswith("WARNING: the source tree %s changed" % tree), err
-    assert "skill/references/levers.md: modified" in err
+    assert "skill/stacks/megatron/levers.md: modified" in err

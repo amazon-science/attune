@@ -78,11 +78,11 @@ if action == "append":
     with open(os.path.join(skill, "past_tuning_projects", "proj_c1_summary.md"), "w") as f:
         f.write("# proj\\n")
 elif action == "write-tree":   # a Bash heredoc into the tree the campaign was copied from
-    with open(os.path.join(os.environ["FAKE_TREE"], "skill", "references", "levers.md"), "a") as f:
+    with open(os.path.join(os.environ["FAKE_TREE"], "skill", "stacks", "megatron", "levers.md"), "a") as f:
         f.write("- a rule\\n")
 elif action in ("write-copy", "write-home"):
     path = (os.path.join(skill, "scripts", "read_metrics.sh") if action == "write-copy" else
-            os.path.join(os.environ["ATTUNE_HOME"], "skill", "references", "levers.md"))
+            os.path.join(os.environ["ATTUNE_HOME"], "skill", "stacks", "megatron", "levers.md"))
     try:
         open(path, "a").write("# tuned\\n")
     except PermissionError:
@@ -145,7 +145,7 @@ def test_a_first_launch_makes_a_sealed_campaign(launch):
     assert not os.access(skill / "scripts" / "read_metrics.sh", os.W_OK)
     assert not os.access(skill / "scripts", os.W_OK) and not os.access(control / "harness", os.W_OK)
     assert not os.access(control, os.W_OK) and not os.access(control / "config.env", os.W_OK)
-    assert not os.access(skill / "references" / "levers.md", os.W_OK)
+    assert not os.access(skill / "stacks" / "megatron" / "levers.md", os.W_OK)
     assert os.access(skill / "past_tuning_projects", os.W_OK)
     assert not list(control.rglob("__pycache__"))
     assert (campaign / ".claude" / "skills" / "autotune-training-throughput").resolve() == skill
@@ -165,8 +165,8 @@ def test_a_first_launch_makes_a_sealed_campaign(launch):
     assert "--disallowedTools" not in call["args"]
     record = json.loads((control / "integrity.json").read_text())
     assert str(skill / "scripts" / "read_metrics.sh") in record["files"]
-    assert str(skill / "references" / "levers.md") in record["files"] and record["source"] == str(REPO)
-    assert "skill/references/levers.md" in record["source_files"] and "harness/lessons.py" in record["source_files"]
+    assert str(skill / "stacks" / "megatron" / "levers.md") in record["files"] and record["source"] == str(REPO)
+    assert "skill/stacks/megatron/levers.md" in record["source_files"] and "harness/lessons.py" in record["source_files"]
     assert "lessons: none written" in p.stdout and "unchanged since launch" in p.stdout
     assert record["dataset"]["path"] == str(launch.dataset) and len(record["dataset"]["parquet_sha256"]) == 64
 
@@ -195,7 +195,9 @@ def test_web_access_off(launch):
     ({"AUTOTUNE_WINDOW_START": "18"}, "default 20 is below the minimum 21"),
     ({"AUTOTUNE_WINDOW_START": "0"}, "AUTOTUNE_WINDOW_START=0 is below the minimum 1"),
     ({"AUTOTUNE_DATASET": "/no/such/file.parquet"}, "finds no dataset at /no/such/file.parquet"),
-    ({"AUTOTUNE_DATASET": "", "SFT_DATA": "", "ATTUNE_BASELINE_YAML": "/x.yaml"}, "no dataset")])
+    ({"AUTOTUNE_DATASET": "", "SFT_DATA": "", "ATTUNE_BASELINE_YAML": "/x.yaml"}, "no dataset"),
+    ({"ATTUNE_STACK": "nope"}, "names no supported stack"), ({"ATTUNE_STACK": "../x"}, "names no supported stack"),
+    ({"ATTUNE_STACK": "torchtitan"}, "names no supported stack")])
 def test_refusals(launch, env, message):
     p = launch(**env)
     assert p.returncode == 2 and message in p.stderr, p.stderr
@@ -329,7 +331,7 @@ def test_the_sessions_attune_home_reaches_the_copy_not_the_tree(launch):
     tree = launch.tmp / "tree"
     for d in ("skill", "harness"):
         shutil.copytree(REPO / d, tree / d, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
-    levers = tree / "skill" / "references" / "levers.md"
+    levers = tree / "skill" / "stacks" / "megatron" / "levers.md"
     before = levers.read_bytes()
     p = launch(FAKE_CLAUDE_ACTION="write-home", ATTUNE_HOME=str(tree))
     assert p.returncode == 0, p.stderr   # the session's $ATTUNE_HOME/skill is the read-only copy
@@ -353,7 +355,7 @@ def test_lessons_go_to_the_inbox_at_session_end(launch):
     assert (out / "proj" / "LESSONS.md").read_bytes() == lessons.read_bytes() and "lessons: exported" in p.stdout
     manifest = json.loads((out / "manifest.json").read_text())
     record = json.loads((launch.control / "integrity.json").read_text())
-    levers = launch.control / "skill" / "references" / "levers.md"
+    levers = launch.control / "skill" / "stacks" / "megatron" / "levers.md"
     version = {"levers_sha256": hashlib.sha256(levers.read_bytes()).hexdigest(), "commit": record["source_commit"],
                "dirty": record["source_dirty"]}
     assert manifest["catalog_version"] == version
@@ -395,11 +397,11 @@ def test_a_write_into_the_tree_is_reported_at_session_end(launch, detach):
                FAKE_CLAUDE_ACTION="write-tree")
     assert p.returncode == 0, p.stderr
     out = _status(launch) if detach else p.stderr
-    assert "WARNING: the source tree %s changed" % tree in out and "skill/references/levers.md: modified" in out, out
+    assert "WARNING: the source tree %s changed" % tree in out and "skill/stacks/megatron/levers.md: modified" in out, out
     if detach:
         assert out.splitlines()[-1] == "exit 0"
     record = json.loads((launch.control / "integrity.json").read_text())
-    assert record["source_checks"][-1]["changes"] == [{"path": "skill/references/levers.md", "problem": "modified"}]
+    assert record["source_checks"][-1]["changes"] == [{"path": "skill/stacks/megatron/levers.md", "problem": "modified"}]
     assert not (launch.control / "integrity_violation.json").exists()
 
 
