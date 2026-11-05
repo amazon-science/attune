@@ -25,7 +25,7 @@ guess. Derive:
 - `project_tag` = baseline basename minus `.yaml`, **lowercased** (K8s rejects uppercase names).
   Name it by **GPU type** (`h100`/`h200`/`b200`), not instance type — e.g. `mymodel-moe-sft-h200` —
   so priors are discoverable by GPU family across projects. Append the instance only when GPU type
-  doesn't disambiguate (p5e and p5en are both H200 → `…-h200-p5e` / `…-h200-p5en`).
+  doesn't disambiguate (two instance types with the same GPU but different networks).
 - `run_id` = `<prefix><project_tag>-<suffix>`: lowercase letters, digits and `-`, ≤47 chars, where `<prefix>` is
   `${ATTUNE_RUN_PREFIX:-$AUTOTUNE_USER-}` (`$AUTOTUNE_USER`, your owner-label value, is required; the launcher
   requires a campaign-specific `ATTUNE_RUN_PREFIX`). Every RayJob and ConfigMap name starts with that prefix:
@@ -512,8 +512,6 @@ lesson the campaign established (L4c); the launcher exports that file, not the s
     `--benchmark` nor the profiler. So either inline the training command in the YAML entrypoint, or keep
     the mounted script but stamp `--num-rollout N` + the workload GBS/RBS (and the profiler flags when you want a
     trace) onto every generated run.
-- **Strip any `NCCL_PROTO` pin from an inherited baseline** — auto-select beats it, and `NCCL_PROTO=Simple`
-  on EFA hangs PP>1. (`references/ledger.md`, anti-patterns.)
 - **No checkpoints in benchmark runs** — drop `--save/--load/--save-interval`; `--ref-load $TORCH_DIST`
   warm-starts. TB-scale MoE checkpoints fill the shared filesystem fast.
 - **Pin the image by digest, not tag** — floating tags re-tag silently; a head/worker digest mismatch wedges

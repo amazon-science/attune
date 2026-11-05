@@ -71,10 +71,9 @@ change across versions: confirm it with `print_topology.md`.
 ### THE RULE: EP alltoall is intranode iff `ETP × EP ≤ GPUs-per-node`
 
 The `TP × EP` (`TP × CP × EP ≤ 8`) mnemonic is wrong unless ETP = TP and CP = 1 (ETP defaults to TP, `arguments.py`):
-set ETP. Verify with NCCL INFO (`comm with N ranks and M nodes`, M = 1) or `print_topology.md`. With EP intranode, PP
+set ETP. Verify with NCCL INFO (`nRanks N nNodes M`, M = 1) or `print_topology.md`. With EP intranode, PP
 choice is bubble vs DP AllReduce.
-- Diagnose PP>1 failures from NCCL INFO, not assumed NIC shortfalls (same-GPU instances differ in EFA geometry).
-  *Scope: F8, V15; MoE; H100, H200, B200.* **Climbing PP** to fold a cross-node EP into a node won even with a much
+- **Climbing PP** to fold a cross-node EP into a node won even with a much
   larger bubble. *Scope: F8; MoE; H100, B200.*
 - **Forced cross-node EP** (expert memory): a2a + PP boundaries ≈ half the kernel time, small GEMM share, low MFU; on
   EFA possibly irreducible (overlap needs vpp, DeepEP needs IB, intranode EP needs a PP that may not fit or host-OOMs
@@ -90,18 +89,15 @@ choice is bubble vs DP AllReduce.
 - **DeepEP** (`--moe-token-dispatcher-type flex --moe-flex-dispatcher-backend deepep`, or `--moe-enable-deepep` on
   builds that use that flag: check `arguments.py`; needs TP×EP > 1, `deep_ep`, no pad-to-capacity): a clean swap from
   alltoall (same routing; no vpp or recompute change; FP8 dispatch off); the variable-length limit is `allgather`'s.
-  *Cross-node: infeasible on EFA* (needs NVSHMEM IBGDA or IB verbs; signatures: `Buffer.__init__` fails with
-  `nvshmemi_transport_init: init failed for transport: IBGDA` or "Peer GPU not accessible", then `ibv_poll_cq failed`
-  and ActorUnavailableError; or every NIC logs `device rdmap* is not supported (expected HCA interface: mlx5)`, then
-  `store->get got 0 bytes`) on every EFA generation and build tried: an InfiniBand lever unless a build adds an EFA
-  transport. *Scope: F8; cross-node EP; H100, H200, B200.* *Intranode* (works on EFA) it pays only where the a2a is the
-  residual bottleneck (ties when PP SendRecv dominates): from a large win stacked with a larger mt, through ties, to a
-  large loss on the newest NVLink (slower than NCCL) and a loss on the previous one at large microbatches; its SMs
-  compete with GEMMs when compute is the larger share; wins did not transfer across GPUs or TP; some stacks segfaulted
-  (measure per stack); one build was wrong or crashed at one hidden size — component-test at the model's shapes.
-  `allgather` is no alternative: slime and miles v0.1.0 rewrite it to `alltoall` after `validate_args` printed the dump
-  (the log says `allgather`; same code, a tie). *Scope: F8 (H100, H200, B200), F2, F4 (H100), V15 (H100, H200, B200);
-  MoE.*
+  *Cross-node: infeasible on EFA* (it needs NVSHMEM IBGDA or IB verbs; `Buffer.__init__` or NCCL store setup fails) on
+  every EFA generation and build tried: an InfiniBand lever unless a build adds an EFA transport. *Scope: F8; cross-node
+  EP; H100, H200, B200.* *Intranode* (works on EFA) it pays only where the a2a is the residual bottleneck (ties when PP
+  SendRecv dominates): from a large win stacked with a larger mt, through ties, to a large loss on the newest NVLink
+  (slower than NCCL) and a loss on the previous one at large microbatches; its SMs compete with GEMMs when compute is
+  the larger share; wins did not transfer across GPUs or TP; some stacks segfaulted (measure per stack); one build was
+  wrong or crashed at one hidden size — component-test at the model's shapes. `allgather` is no alternative: slime and
+  miles v0.1.0 rewrite it to `alltoall` after `validate_args` printed the dump (the log says `allgather`; same code, a
+  tie). *Scope: F8 (H100, H200, B200), F2, F4 (H100), V15 (H100, H200, B200); MoE.*
 
 ## (c) Profile → bottleneck classification
 
@@ -220,8 +216,7 @@ elsewhere) — re-check after topology changes. *Scope: mostly F4, large-vocab M
   edge collapsed throughput by a large factor (allocator stall; untraced) — the first stage is usually tightest.
 - *Stack:* Megatron's transformer decoder runs splits with and without vpp; in the Megatron-LM of miles v0.1.0
   `MambaStack` ignores the split flags its attention/MoE layers follow (`megatron/core/ssm/mamba_block.py`), so a split
-  loads wrong weights (step-0 loss several times the baseline's). A hang at NCCL init on an uneven layout matched an
-  `NCCL_PROTO=Simple` pin; check for one first. *Scope: hang V15 (H200, older image); F8 (H100, B200).*
+  loads wrong weights (step-0 loss several times the baseline's). *Scope: F8 (H100, B200).*
 
 **Stage memory-pressure stall → uneven split or more recompute on that stage.** Below 3 GB free slime runs
 `torch.cuda.synchronize()` + `gc.collect()` + `torch.cuda.empty_cache()` before collectives
@@ -254,9 +249,7 @@ PP, offload, TP/SP, length mix). *Scope: V15; MoE; H100, H200, B200.*
   bubble first. *Scope: V15; MoE; H100, H200.*
 - **PP>1 pays a shape exchange per p2p call:** slime and miles force `variable_seq_lengths` (`arguments.py`).
 - **miles `--qkv-format bshd`** (DeepSeek-V4): miles v0.1.0 asserts dynamic batching off (`miles/utils/arguments.py`),
-  so packing is mbs (k rows), mt advice is thd-only. On DeepSeek-V4-Flash k > 1 crashed in the first training step
-  (`view size is not compatible with input tensor's size and stride`), leaving DP (lower TP or CP); retry k = 2 per
-  image. *Scope: F8; a large MoE; H200; miles.*
+  so packing is mbs (k rows), mt advice is thd-only.
 
 **Without dynamic batching mbs is the packing lever** — fewer accumulation microbatches, bigger GEMMs: ~linear to the
 ceiling on a memory-bound single-stage MoE, saturating after one step at deep PP; recompute, EP and TP matter via the
@@ -422,8 +415,7 @@ few hundred MiB short; at saturated memory it thrashed several times slower. *Sc
   GBS 256–1,024; MoE; H200.* **`NCCL_NVLS_ENABLE`:** keep the default (2; `*_NVLS_*` trace kernels are the check);
   neutral multi-node, where no NVLS kernel ran for training collectives; remove legacy `=0`. *Scope: V15; MoE; H200.*
 - **CDMC:** FSDP asserts > 1; EP comm overlap prefers > 1 and only warns (`arguments.py`). Check the image first.
-- **`NCCL_DEBUG=INFO`:** one stock image used sockets until `NCCL_NET_PLUGIN` and `NCCL_TUNER_PLUGIN` were set; keep
-  INFO short (long many-rank runs filled Ray's temp storage). *Scope: V15; MoE; H100.*
+- **`NCCL_DEBUG=INFO`:** keep INFO runs short (long many-rank runs filled Ray's temp storage). *Scope: V15; MoE; H100.*
 
 ## (e) How to drive it
 

@@ -72,7 +72,7 @@ does not set it). Recorded causes: one rank still compiling or autotuning kernel
 one rank near out-of-memory, an expert-parallel group that spans nodes, a pinned `NCCL_PROTO`, and a bad node.
 
 **Fix:**
-1. Strip any `NCCL_PROTO` pin (SKILL.md).
+1. Strip any `NCCL_PROTO` pin (levers.md, Tier env).
 2. Diff the config against the last run that passed init: a group that moved across nodes (EP placement: levers.md
    §b), vpp, recompute, overlap flags.
 3. If a first-step compile is the suspect (cold kernel cache, deep PP, a new GEMM backend), raise

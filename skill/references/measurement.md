@@ -324,10 +324,9 @@ training pods (`nvidia-smi`) need `kubectl exec` into them, which the agent does
 
 ## 9. NCCL comm placement (verify EP/TP intranode)
 
-With `NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET`, grep for `NET/OFI Tuner init: comm with N ranks
-and M nodes`. `M=1` = intranode (good for EP alltoall); `M>1` = cross-node (EFA). Map each "comm
-with N ranks" line to its parallelism-group size to verify placement. Full method:
-`print_topology.md`.
+With `NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT`, grep NCCL's communicator line for `nRanks N nNodes M`.
+`M=1` = intranode (good for EP alltoall); `M>1` = cross-node. Map each `nRanks N` to its parallelism-group size to
+verify placement. Full method: `print_topology.md`.
 
 ## 10. Python stack dumps for hangs (when no trace exists)
 
@@ -347,9 +346,6 @@ blocked on mutex/syscall.
   only on NCCL watchdog, not c10d pre-NCCL timeouts); py-spy is the only way.
 - Ranks in Triton JIT `cuModuleLoadData` — looks hung, often just slow compilation; 3 snapshots tell.
 
-**Pod IP ↔ node mapping is NOT guaranteed stable across runs** — with AWS VPC CNI a node's ENI
-IP-pool can lead to IP reuse, but this is not a contract; do not assume "same pod IP = same
-physical node" without verifying against current VPC-CNI behavior/docs. For node-specific hang
-diagnosis, read the node directly from
+**A pod IP does not identify a node across runs.** For node-specific hang diagnosis, read the node directly from
 `kubectl --context "$AUTOTUNE_KUBECTL_CONTEXT" -n "$KUBECTL_NS" get pods -o wide` (the `NODE` column) during the
 run rather than inferring it from the IP.
